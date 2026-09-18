@@ -1,0 +1,98 @@
+name: CotralLive
+options:
+  bundleIdPrefix: dev.gab8bit
+  deploymentTarget:
+    iOS: "16.0"
+  createIntermediateGroups: true
+configs:
+  Debug: debug
+  Release: release
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    CODE_SIGN_STYLE: Automatic
+    ENABLE_PREVIEWS: YES
+packages:
+  ZIPFoundation:
+    url: https://github.com/weichsel/ZIPFoundation.git
+    from: 0.9.19
+  SwiftProtobuf:
+    url: https://github.com/apple/swift-protobuf.git
+    from: 1.28.0
+targets:
+  CotralLive:
+    type: application
+    platform: iOS
+    deploymentTarget: "16.0"
+    sources:
+      - path: Sources
+      # NOTE: deliberately under `sources`, not `resources` — this xcodegen
+      # version (2.46.0) silently drops a target's `resources:` entries
+      # (reproduced with a from-scratch minimal project.yml, so it's an
+      # xcodegen bug/regression, not a config mistake here). Putting the
+      # folder under `sources` instead works: xcodegen still auto-detects
+      # the .xcassets inside as an asset catalog rather than compiling it
+      # as Swift source. Re-test with `resources:` if xcodegen is upgraded.
+      - path: Resources
+    dependencies:
+      - package: ZIPFoundation
+      - package: SwiftProtobuf
+    info:
+      path: Sources/App/Info.plist
+      properties:
+        CFBundleDisplayName: Madovai
+        CFBundleShortVersionString: "1.0"
+        CFBundleVersion: "1"
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UIRequiresFullScreen: false
+        NSLocationWhenInUseUsageDescription: "Madovai usa la tua posizione per mostrarti le paline e le fermate più vicine sulla mappa."
+        # The app talks directly to Cotral's own internal live-data endpoint
+        # (travel.mob.cotralspa.it, the same one packages/server in
+        # ChromuSx/cotral proxies) which is plain HTTP with no TLS — this
+        # exception targets ONLY that specific host, not a blanket allow-all.
+        # The GTFS static-data download uses HTTPS and needs no exception.
+        NSAppTransportSecurity:
+          NSExceptionDomains:
+            travel.mob.cotralspa.it:
+              NSExceptionAllowsInsecureHTTPLoads: true
+              NSIncludesSubdomains: false
+              NSExceptionMinimumTLSVersion: TLSv1.2
+              NSExceptionRequiresForwardSecrecy: false
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.gab8bit.madovai
+        TARGETED_DEVICE_FAMILY: "1"
+        MARKETING_VERSION: "1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+  CotralLiveTests:
+    type: bundle.unit-test
+    platform: iOS
+    deploymentTarget: "16.0"
+    sources:
+      - path: Tests/CotralLiveTests
+    dependencies:
+      - target: CotralLive
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: dev.gab8bit.madovai.tests
+schemes:
+  CotralLive:
+    build:
+      targets:
+        CotralLive: all
+        CotralLiveTests: [test]
+    run:
+      config: Debug
+    archive:
+      config: Release
+    test:
+      config: Debug
+      targets:
+        - CotralLiveTests
