@@ -8,7 +8,7 @@ struct LineeDetailView: View {
     @ObservedObject var favoritesStore: FavoritesStore
     @ObservedObject var vehicleTracker: VehicleTracker
     let transitsRepository: TransitsRepository
-    let cotralTrainScheduleRepository: CotralTrainScheduleRepository
+    let astralTrainRepository: AstralTrainRepository
 
     var body: some View {
         Group {
@@ -22,11 +22,11 @@ struct LineeDetailView: View {
                     favoritesStore: favoritesStore,
                     vehicleTracker: vehicleTracker,
                     transitsRepository: transitsRepository,
-                    cotralTrainScheduleRepository: cotralTrainScheduleRepository
+                    astralTrainRepository: astralTrainRepository
                 )
             }
         }
-        .navigationTitle(route.shortName)
+        .navigationTitle(route.displayName)
         .navigationBarTitleDisplayMode(.inline)
     }
 }
@@ -51,21 +51,23 @@ private func dedupedByName<Stop>(_ stops: [Stop], name: (Stop) -> String) -> [St
 }
 
 /// Atac/Roma TPL: live vehicles + per-stop predictions. Vehicles here are
-/// always realtime; a tapped stop's own detail sheet additionally falls
+/// always realtime; a tapped station's own detail sheet additionally falls
 /// back to a static-timetable estimate when it has no live prediction at
-/// all (see `AtacGtfsStore.scheduledDepartures(forStopId:)`).
+/// all (see `AtacGtfsStore.scheduledDepartures(forStopId:)`). Stations are
+/// grouped by name via the shared `groupedStopsByName` (also used by the
+/// map's own pins/search, so a station reads as one place everywhere).
 private struct AtacLineDetail: View {
     let route: AtacRoute
     @ObservedObject var atacGtfsStore: AtacGtfsStore
     @ObservedObject var atacRealtimeService: AtacRealtimeService
-    @State private var selectedStop: AtacStop?
+    @State private var selectedStation: AtacStopGroup?
 
     private var vehicles: [TransitVehicle] {
         atacRealtimeService.vehicles.filter { $0.routeId == route.routeId }
     }
 
-    private var stops: [AtacStop] {
-        dedupedByName(atacGtfsStore.stopsForRoute(route.routeId), name: \.stopName)
+    private var stationGroups: [AtacStopGroup] {
+        groupedStopsByName(atacGtfsStore.stopsForRoute(route.routeId))
     }
 
     var body: some View {
@@ -73,7 +75,7 @@ private struct AtacLineDetail: View {
             Section {
                 HStack(spacing: 8) {
                     Image(systemName: route.kind.sfSymbolName)
-                    Text(route.routeLongName.isEmpty ? route.routeShortName : route.routeLongName)
+                    Text(route.friendlyName)
                         .font(.subheadline)
                     Spacer()
                 }
@@ -88,8 +90,15 @@ private struct AtacLineDetail: View {
                     ForEach(vehicles) { vehicle in
                         HStack {
                             Image(systemName: vehicle.kind.sfSymbolName).foregroundStyle(.teal)
-                            Text("Veicolo \(vehicle.id.replacingOccurrences(of: "atac-", with: ""))")
-                                .font(.subheadline)
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text("Veicolo \(vehicle.id.replacingOccurrences(of: "atac-", with: ""))")
+                                    .font(.subheadline)
+                                if let headsign = vehicle.tripId.flatMap({ atacGtfsStore.headsign(forTripId: $0) }) {
+                                    Text("verso \(headsign)")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
                             Spacer()
                             Circle().fill(Color.green).frame(width: 7, height: 7)
                         }
@@ -97,17 +106,17 @@ private struct AtacLineDetail: View {
                 }
             }
 
-            Section("Fermate (\(stops.count))") {
-                if stops.isEmpty {
+            Section("Fermate (\(stationGroups.count))") {
+                if stationGroups.isEmpty {
                     Text("Nessuna fermata trovata per questa linea nel riquadro considerato.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 } else {
-                    ForEach(stops, id: \.stopId) { stop in
+                    ForEach(stationGroups) { station in
                         Button {
-                            selectedStop = stop
+                            selectedStation = station
                         } label: {
-                            StopPredictionRow(stop: stop, routeId: route.routeId, realtimeService: atacRealtimeService)
+                            StopPredictionRow(station: station, routeId: route.routeId, atacGtfsStore: atacGtfsStore, realtimeService: atacRealtimeService)
                         }
                         .buttonStyle(.plain)
                     }
@@ -115,8 +124,8 @@ private struct AtacLineDetail: View {
             }
         }
         .listStyle(.insetGrouped)
-        .sheet(item: $selectedStop) { stop in
-            AtacStopDetailSheet(stop: stop, realtimeService: atacRealtimeService, atacGtfsStore: atacGtfsStore)
+        .sheet(item: $selectedStation) { station in
+            AtacStopDetailSheet(stops: station.stops, routeId: route.routeId, realtimeService: atacRealtimeService, atacGtfsStore: atacGtfsStore)
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
         }
@@ -124,17 +133,33 @@ private struct AtacLineDetail: View {
 }
 
 private struct StopPredictionRow: View {
-    let stop: AtacStop
+    let station: AtacStopGroup
     let routeId: String
+    let atacGtfsStore: AtacGtfsStore
     @ObservedObject var realtimeService: AtacRealtimeService
 
+    /// Soonest prediction across every platform of this station for this
+    /// route — either direction could be the one arriving next.
     private var nextArrival: AtacStopPrediction? {
-        (realtimeService.stopPredictions[stop.stopId] ?? []).first { $0.routeId == routeId }
+        station.stops
+            .flatMap { realtimeService.stopPredictions[$0.stopId] ?? [] }
+            .filter { $0.routeId == routeId }
+            .min { $0.arrival < $1.arrival }
     }
 
     var body: some View {
         HStack {
-            Text(stop.stopName).font(.subheadline)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(station.name).font(.subheadline)
+                if station.stops.count > 1 {
+                    let directions = station.stops.compactMap { atacGtfsStore.headsign(forRouteId: routeId, stopId: $0.stopId) }
+                    if !directions.isEmpty {
+                        Text(directions.joined(separator: " · "))
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+            }
             Spacer()
             if let prediction = nextArrival {
                 Text(prediction.minutesFromNow <= 0 ? "in arrivo" : "\(prediction.minutesFromNow) min")
@@ -153,8 +178,8 @@ private struct StopPredictionRow: View {
 
 /// Cotral rail (Roma Lido/Metromare, Roma-Viterbo, ecc.): tapping a station
 /// opens the exact same schedule view as tapping its pole on the map
-/// (`PoleDetailSheetContainer`) — live PIV.do transits when Cotral has them
-/// for that stop, the cotralspa.it widget or the static GTFS timetable
+/// (`PoleDetailSheetContainer`) — ASTRAL's schedule (real delay,
+/// cancellations) when it resolves this station, the static GTFS timetable
 /// otherwise (see `PoleDetailViewModel.scheduledDeparturesByDirection`).
 private struct CotralRailLineDetail: View {
     let route: GtfsRoute
@@ -162,7 +187,7 @@ private struct CotralRailLineDetail: View {
     @ObservedObject var favoritesStore: FavoritesStore
     @ObservedObject var vehicleTracker: VehicleTracker
     let transitsRepository: TransitsRepository
-    let cotralTrainScheduleRepository: CotralTrainScheduleRepository
+    let astralTrainRepository: AstralTrainRepository
 
     @State private var selectedPole: Pole?
 
@@ -205,7 +230,7 @@ private struct CotralRailLineDetail: View {
                 vehicleTracker: vehicleTracker,
                 transitsRepository: transitsRepository,
                 gtfsStore: gtfsStore,
-                cotralTrainScheduleRepository: cotralTrainScheduleRepository
+                astralTrainRepository: astralTrainRepository
             )
             .presentationDetents([.medium, .large])
             .presentationDragIndicator(.visible)

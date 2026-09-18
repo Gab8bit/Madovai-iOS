@@ -38,6 +38,17 @@ enum AtacGtfsParsing {
         /// stop_times row's trip back to a route + calendar service.
         var tripToRoute: [String: String]
         var tripToService: [String: String]
+        /// trip_id -> cleaned trip_headsign (e.g. "Anagnina") — lets a
+        /// specific vehicle/trip's own direction be shown (see
+        /// `AtacGtfsStore.headsign(forTripId:)`).
+        var tripToHeadsign: [String: String]
+        /// "routeId|stopId" -> cleaned trip_headsign of the trips of that
+        /// route serving that stop — a physical platform stop_id almost
+        /// always serves one consistent direction for a given route (that's
+        /// exactly why two "duplicate-looking" stops with the same name are
+        /// really two different platforms), so this is a stable per-station,
+        /// per-direction label (see `AtacGtfsStore.headsign(forRouteId:stopId:)`).
+        var stopHeadsignByRoute: [String: String]
         /// "yyyyMMdd" -> service_ids running that day. This feed ships
         /// `calendar_dates.txt` with no `calendar.txt` at all — i.e. it's
         /// used in "explicit full list" mode (every active service day is
@@ -49,9 +60,13 @@ enum AtacGtfsParsing {
     static func parseAll(in directory: URL) throws -> ParsedStatic {
         let stops = try parseStops(directory.appendingPathComponent("stops.txt"))
         let routes = try parseRoutes(directory.appendingPathComponent("routes.txt"))
-        let (routeToShapeIds, tripToRoute, tripToService) = try parseTrips(directory.appendingPathComponent("trips.txt"))
+        let (routeToShapeIds, tripToRoute, tripToService, tripToHeadsign) = try parseTrips(directory.appendingPathComponent("trips.txt"))
         let shapePoints = try parseShapes(directory.appendingPathComponent("shapes.txt"))
-        let stopToRouteIds = try parseStopTimesForRouteMembership(directory.appendingPathComponent("stop_times.txt"), tripToRoute: tripToRoute)
+        let membership = try parseStopTimesForRouteMembership(
+            directory.appendingPathComponent("stop_times.txt"),
+            tripToRoute: tripToRoute,
+            tripToHeadsign: tripToHeadsign
+        )
         let activeServiceIdsByDate = try parseCalendarDates(directory.appendingPathComponent("calendar_dates.txt"))
 
         var shapes: [AtacLineShape] = []
@@ -68,11 +83,24 @@ enum AtacGtfsParsing {
             routes: routes,
             routeToShapeIds: routeToShapeIds,
             shapes: shapes,
-            stopToRouteIds: stopToRouteIds,
+            stopToRouteIds: membership.stopToRouteIds,
             tripToRoute: tripToRoute,
             tripToService: tripToService,
+            tripToHeadsign: tripToHeadsign,
+            stopHeadsignByRoute: membership.stopHeadsignByRoute,
             activeServiceIdsByDate: activeServiceIdsByDate
         )
+    }
+
+    /// Cleans a raw `trip_headsign` like "ANAGNINA (MA)" down to "Anagnina"
+    /// — the "(MA)"/"(MB1)"/etc suffix is this feed's own internal line
+    /// code, not meaningful to a rider, stripped the same way a GTFS stop
+    /// name's own parenthetical suffix already is elsewhere
+    /// (`GTFSTextUtils.extractLocalityFromStopName`). Headsigns in this feed
+    /// are all-caps; `.capitalized` reads more like the rest of the app's UI.
+    private static func cleanHeadsign(_ raw: String) -> String? {
+        let cleaned = GTFSTextUtils.extractLocalityFromStopName(raw).capitalized
+        return cleaned.isEmpty ? nil : cleaned
     }
 
     private static func parseStops(_ url: URL) throws -> [AtacStop] {
@@ -123,16 +151,19 @@ enum AtacGtfsParsing {
     }
 
     /// route_id -> distinct shape_ids used by its trips, trip_id -> route_id
-    /// (needed to resolve `stop_times.txt` rows to a route), and trip_id ->
+    /// (needed to resolve `stop_times.txt` rows to a route), trip_id ->
     /// service_id (needed to later filter a trip's departures by which
-    /// calendar days it actually runs). Uses the quote-aware parser
+    /// calendar days it actually runs), and trip_id -> cleaned headsign
+    /// (field index 3, e.g. "ANAGNINA (MA)" -> "Anagnina" — the destination
+    /// a rider sees on the vehicle itself). Uses the quote-aware parser
     /// (trip_headsign can contain arbitrary quoted text, so a naive comma
     /// split would misalign the later shape_id column).
-    private static func parseTrips(_ url: URL) throws -> (routeToShapeIds: [String: Set<String>], tripToRoute: [String: String], tripToService: [String: String]) {
+    private static func parseTrips(_ url: URL) throws -> (routeToShapeIds: [String: Set<String>], tripToRoute: [String: String], tripToService: [String: String], tripToHeadsign: [String: String]) {
         let content = try String(contentsOf: url, encoding: .utf8)
         var routeToShapeIds: [String: Set<String>] = [:]
         var tripToRoute: [String: String] = [:]
         var tripToService: [String: String] = [:]
+        var tripToHeadsign: [String: String] = [:]
         var isFirstLine = true
         content.enumerateLines { line, _ in
             defer { isFirstLine = false }
@@ -144,29 +175,41 @@ enum AtacGtfsParsing {
             let routeId = fields[0]
             let serviceId = fields[1]
             let tripId = fields[2]
+            let headsign = fields[3]
             let shapeId = fields[7]
             guard !routeId.isEmpty else { return }
             if !tripId.isEmpty {
                 tripToRoute[tripId] = routeId
                 if !serviceId.isEmpty { tripToService[tripId] = serviceId }
+                if let cleaned = cleanHeadsign(headsign) { tripToHeadsign[tripId] = cleaned }
             }
             guard !shapeId.isEmpty else { return }
             routeToShapeIds[routeId, default: []].insert(shapeId)
         }
-        return (routeToShapeIds, tripToRoute, tripToService)
+        return (routeToShapeIds, tripToRoute, tripToService, tripToHeadsign)
+    }
+
+    struct RouteMembership {
+        var stopToRouteIds: [String: Set<String>]
+        /// "routeId|stopId" -> that route's headsign at that stop — see
+        /// `ParsedStatic.stopHeadsignByRoute`.
+        var stopHeadsignByRoute: [String: String]
     }
 
     /// stop_id -> distinct route_ids serving it, resolved from
-    /// `stop_times.txt` via `tripToRoute`. This file is huge (240MB, ~5.1M
-    /// rows for the whole network) so — unlike everything else in this
-    /// file — it's read as raw bytes and scanned by hand instead of going
-    /// through `String.enumerateLines` (which does Unicode-correct grapheme
-    /// scanning and is far too slow at this scale) or the quote-aware CSV
-    /// parser. Only trip_id (column 0) and stop_id (column 3) are needed;
-    /// neither is ever quoted in this feed in practice.
-    private static func parseStopTimesForRouteMembership(_ url: URL, tripToRoute: [String: String]) throws -> [String: Set<String>] {
+    /// `stop_times.txt` via `tripToRoute` — plus, piggy-backing on the same
+    /// full pass since it already has both ids in hand for every row, each
+    /// (route, stop) pair's headsign via `tripToHeadsign`. This file is huge
+    /// (240MB, ~5.1M rows for the whole network) so — unlike everything else
+    /// in this file — it's read as raw bytes and scanned by hand instead of
+    /// going through `String.enumerateLines` (which does Unicode-correct
+    /// grapheme scanning and is far too slow at this scale) or the
+    /// quote-aware CSV parser. Only trip_id (column 0) and stop_id (column
+    /// 3) are needed; neither is ever quoted in this feed in practice.
+    private static func parseStopTimesForRouteMembership(_ url: URL, tripToRoute: [String: String], tripToHeadsign: [String: String]) throws -> RouteMembership {
         let data = try Data(contentsOf: url, options: .mappedIfSafe)
         var stopToRouteIds: [String: Set<String>] = [:]
+        var stopHeadsignByRoute: [String: String] = [:]
         stopToRouteIds.reserveCapacity(10_000)
 
         data.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
@@ -196,6 +239,10 @@ enum AtacGtfsParsing {
                             guard let routeId = tripToRoute[tripId] else { return }
                             let stopId = String(decoding: UnsafeBufferPointer(start: bytes + fieldStart, count: j - fieldStart), as: UTF8.self)
                             stopToRouteIds[stopId, default: []].insert(routeId)
+                            let key = "\(routeId)|\(stopId)"
+                            if stopHeadsignByRoute[key] == nil, let headsign = tripToHeadsign[tripId] {
+                                stopHeadsignByRoute[key] = headsign
+                            }
                             return
                         }
                         fieldIndex += 1
@@ -221,7 +268,7 @@ enum AtacGtfsParsing {
             }
         }
 
-        return stopToRouteIds
+        return RouteMembership(stopToRouteIds: stopToRouteIds, stopHeadsignByRoute: stopHeadsignByRoute)
     }
 
     /// shape_id -> ordered coordinates. Fast-path manual split (no

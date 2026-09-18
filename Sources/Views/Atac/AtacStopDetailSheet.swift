@@ -6,21 +6,50 @@ import SwiftUI
 /// `isScheduled` on the resulting `AtacStopPrediction`s) — see that method's
 /// doc comment for what it can't account for (mainly overnight runs still
 /// under yesterday's service_id).
+///
+/// `stops` can hold more than one `AtacStop` — a real station is often split
+/// across several GTFS `stop_id`s, one physical platform per direction of
+/// travel (what an earlier version of this app mistook for "duplicate"
+/// stops and silently collapsed into one, discarding real data). When there
+/// is more than one, a segmented control lets the user switch between them,
+/// labeled by each platform's own direction rather than a meaningless
+/// repeated station name.
 struct AtacStopDetailSheet: View {
-    let stop: AtacStop
+    let stops: [AtacStop]
+    /// The line context to resolve each stop's direction label from, when
+    /// known (e.g. opened from a specific line's own station list) — nil
+    /// when this sheet was opened from a bare map-pin tap or search result
+    /// with no specific line in mind, in which case `headsign(for:)` falls
+    /// back to any route's headsign for that platform instead.
+    let routeId: String?
     @ObservedObject var realtimeService: AtacRealtimeService
     let atacGtfsStore: AtacGtfsStore
 
+    @State private var selectedStopId: String?
     @State private var scheduledFallback: [AtacStopPrediction] = []
     @State private var isLoadingFallback = false
 
+    private var selectedStop: AtacStop {
+        stops.first { $0.stopId == selectedStopId } ?? stops[0]
+    }
+
     private var livePredictions: [AtacStopPrediction] {
-        realtimeService.stopPredictions[stop.stopId] ?? []
+        realtimeService.stopPredictions[selectedStop.stopId] ?? []
+    }
+
+    private func headsign(for stop: AtacStop) -> String? {
+        if let routeId {
+            return atacGtfsStore.headsign(forRouteId: routeId, stopId: stop.stopId)
+        }
+        return atacGtfsStore.anyHeadsign(forStopId: stop.stopId)
     }
 
     var body: some View {
         VStack(spacing: 0) {
             header
+            if stops.count > 1 {
+                directionPicker
+            }
             Divider()
             if !livePredictions.isEmpty {
                 List(livePredictions) { prediction in
@@ -54,17 +83,31 @@ struct AtacStopDetailSheet: View {
                 Spacer()
             }
         }
-        .task(id: stop.stopId) {
+        .task(id: selectedStop.stopId) {
             guard livePredictions.isEmpty else { return }
             isLoadingFallback = true
             defer { isLoadingFallback = false }
-            scheduledFallback = (try? await atacGtfsStore.scheduledDepartures(forStopId: stop.stopId)) ?? []
+            scheduledFallback = (try? await atacGtfsStore.scheduledDepartures(forStopId: selectedStop.stopId)) ?? []
         }
+    }
+
+    private var directionPicker: some View {
+        Picker("Direzione", selection: Binding(
+            get: { selectedStopId ?? stops[0].stopId },
+            set: { selectedStopId = $0 }
+        )) {
+            ForEach(stops) { stop in
+                Text(headsign(for: stop) ?? stop.stopName).tag(stop.stopId)
+            }
+        }
+        .pickerStyle(.segmented)
+        .padding(.horizontal)
+        .padding(.bottom, 8)
     }
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(stop.stopName)
+            Text(stops[0].stopName)
                 .font(.title3.bold())
             Text("Atac / Roma TPL · tempo reale")
                 .font(.subheadline)
@@ -96,14 +139,21 @@ private struct AtacPredictionRow: View {
             }
             .frame(width: 48)
 
-            if prediction.isScheduled {
-                Text("stimato")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            } else if let delaySeconds = prediction.delaySeconds, abs(delaySeconds) >= 60 {
-                Text(delayLabel(delaySeconds))
-                    .font(.caption)
-                    .foregroundStyle(delaySeconds > 0 ? .red : .green)
+            VStack(alignment: .leading, spacing: 2) {
+                if let headsign = prediction.headsign, !headsign.isEmpty {
+                    Text("verso \(headsign)")
+                        .font(.subheadline)
+                        .lineLimit(1)
+                }
+                if prediction.isScheduled {
+                    Text("stimato")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else if let delaySeconds = prediction.delaySeconds, abs(delaySeconds) >= 60 {
+                    Text(delayLabel(delaySeconds))
+                        .font(.caption)
+                        .foregroundStyle(delaySeconds > 0 ? .red : .green)
+                }
             }
 
             Spacer()

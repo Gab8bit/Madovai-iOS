@@ -5,18 +5,19 @@ import SwiftUI
 /// itinerary (checked directly against the API — several plausible command
 /// variants all errored or returned nothing) and there's no confirmed way to
 /// map this vehicle's internal run id to a GTFS trip, so this can't show
-/// *this specific train's* remaining stops. It can, and does, show the
-/// cotralspa.it timetable widget (tier 2 of the same fallback
-/// `PoleDetailViewModel` uses per-station) for the vehicle's own direction —
-/// `vehicle.routeId` already parses straight into a `CotralTrainRoute`, and
-/// the widget takes exactly that, no stop id needed. That's a genuine
-/// published schedule for this line and direction, just not proof-linked to
-/// this one vehicle (the widget carries no train id either, only times).
+/// *this specific train's* remaining stops. It can, and does, show ASTRAL's
+/// published timetable (the same primary source `PoleDetailViewModel` uses
+/// per-station) for the vehicle's own direction — `vehicle.routeId` already
+/// parses straight into a `CotralTrainRoute`, and ASTRAL takes exactly that
+/// plus a station name, no shared vehicle/stop id needed. That's a genuine
+/// schedule for this line and direction, with real delay/cancellation data,
+/// just not proof-linked to this one vehicle (ASTRAL carries no train id
+/// either, only times per station).
 struct CotralVehicleDetailSheet: View {
     let vehicle: TransitVehicle
-    let scheduleRepository: CotralTrainScheduleRepository
+    let astralTrainRepository: AstralTrainRepository
 
-    @State private var stations: [CotralTrainStationSchedule] = []
+    @State private var stations: [StationNextPassage] = []
     @State private var isLoading = false
     @State private var loadFailed = false
 
@@ -48,13 +49,13 @@ struct CotralVehicleDetailSheet: View {
                 title: loadFailed ? "Orario non disponibile" : "Itinerario del veicolo non disponibile",
                 message: loadFailed
                     ? "Non è stato possibile recuperare l'orario di questa linea al momento."
-                    : "Cotral non espone l'elenco delle fermate di questa specifica corsa tramite l'endpoint usato dall'app — solo la sua posizione live."
+                    : "Non risultano corse programmate per questa linea per il resto di oggi."
             )
             Spacer()
         } else {
             List {
                 VStack(alignment: .leading, spacing: 4) {
-                    Label("Orario della linea da tabella, non di questa specifica corsa", systemImage: "calendar")
+                    Label("Orario della linea, non di questa specifica corsa", systemImage: "calendar")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     if let trainRoute {
@@ -64,40 +65,13 @@ struct CotralVehicleDetailSheet: View {
                     }
                 }
                 .listRowSeparator(.hidden)
-                ForEach(stationsByNextPassage, id: \.station.id) { entry in
-                    HStack {
-                        Text(entry.station.stationName)
-                            .font(.subheadline)
-                        Spacer()
-                        if let next = entry.next {
-                            Text(next.time)
-                                .font(.subheadline.weight(.semibold).monospacedDigit())
-                        } else {
-                            Text("—")
-                                .font(.caption)
-                                .foregroundStyle(.tertiary)
-                        }
-                    }
-                    .listRowSeparator(.hidden)
+                ForEach(stations) { entry in
+                    StationNextPassageRow(entry: entry)
+                        .listRowSeparator(.hidden)
                 }
             }
             .listStyle(.plain)
         }
-    }
-
-    /// Stations sorted by their own next-passage time (ascending) rather
-    /// than by physical position — a station's very next train isn't
-    /// necessarily the same physical run as its neighbor's, so this list is
-    /// "what's coming up next, anywhere on the line" rather than one train's
-    /// itinerary. Stations with nothing left today sort to the bottom.
-    private var stationsByNextPassage: [(station: CotralTrainStationSchedule, next: CotralTrainPassage?)] {
-        stations
-            .map { ($0, nextPassage($0)) }
-            .sorted { lhs, rhs in
-                let l = lhs.1.flatMap { Self.secondsFromHHMM($0.time) } ?? Int.max
-                let r = rhs.1.flatMap { Self.secondsFromHHMM($0.time) } ?? Int.max
-                return l < r
-            }
     }
 
     private func loadSchedule() async {
@@ -106,37 +80,39 @@ struct CotralVehicleDetailSheet: View {
         loadFailed = false
         defer { isLoading = false }
         do {
-            stations = try await scheduleRepository.schedule(for: trainRoute)
+            let stationList = try await astralTrainRepository.stations(for: trainRoute)
+            // Fan out one /api/transit call per station, concurrently (same
+            // pattern as `CotralViewportVehicleService.scan()`'s per-pole
+            // fan-out) — ASTRAL scopes a transit query to a single station,
+            // unlike the old widget which returned every station's next
+            // passage in one call.
+            let nextByStation = await withTaskGroup(of: (String, AstralDeparture?).self) { group -> [String: AstralDeparture?] in
+                for station in stationList {
+                    group.addTask {
+                        let direction = try? await astralTrainRepository.departures(for: trainRoute, stationName: station.nomeFermata)
+                        return (station.nomeFermata, direction?.entries.upcoming().first)
+                    }
+                }
+                var result: [String: AstralDeparture?] = [:]
+                for await (name, next) in group { result[name] = next }
+                return result
+            }
+            // Sorted by each station's own next-passage time, not physical
+            // order — a station's very next train isn't necessarily the
+            // same physical run as its neighbor's, so this is "what's
+            // coming up next, anywhere on the line". Stations with nothing
+            // left today sort to the bottom.
+            stations = stationList
+                .map { StationNextPassage(stationName: $0.nomeFermata, next: nextByStation[$0.nomeFermata] ?? nil) }
+                .sorted { lhs, rhs in
+                    let l = lhs.next?.sortSeconds ?? Int.max
+                    let r = rhs.next?.sortSeconds ?? Int.max
+                    return l < r
+                }
         } catch {
             stations = []
             loadFailed = true
         }
-    }
-
-    /// The next scheduled passage from now, if any — same "today, still
-    /// ahead of now" logic `PoleDetailViewModel.fetchTrainWidgetSchedule`
-    /// already applies to this same widget's passages.
-    private func nextPassage(_ station: CotralTrainStationSchedule) -> CotralTrainPassage? {
-        let now = Self.secondsSinceMidnight(Date())
-        return station.passages
-            .compactMap { passage -> (CotralTrainPassage, Int)? in
-                guard let seconds = Self.secondsFromHHMM(passage.time) else { return nil }
-                return (passage, seconds)
-            }
-            .filter { $0.1 >= now }
-            .min { $0.1 < $1.1 }
-            .map(\.0)
-    }
-
-    private static func secondsSinceMidnight(_ date: Date, calendar: Calendar = .current) -> Int {
-        let components = calendar.dateComponents([.hour, .minute, .second], from: date)
-        return (components.hour ?? 0) * 3600 + (components.minute ?? 0) * 60 + (components.second ?? 0)
-    }
-
-    private static func secondsFromHHMM(_ time: String) -> Int? {
-        let parts = time.split(separator: ":")
-        guard parts.count == 2, let hours = Int(parts[0]), let minutes = Int(parts[1]) else { return nil }
-        return hours * 3600 + minutes * 60
     }
 
     private var header: some View {
@@ -159,7 +135,7 @@ struct CotralVehicleDetailSheet: View {
         .padding()
     }
 
-    /// For a train, `routeLabel` is one of the 6 internal `codicePercorso`
+    /// For a train, `routeLabel` is one of the internal `codicePercorso`
     /// values (e.g. "RL_PSP-CC") — not meaningful to a rider, so this shows
     /// the line's real name instead when recognized.
     private var lineLabel: String {
@@ -172,5 +148,68 @@ struct CotralVehicleDetailSheet: View {
     private func delayLabel(_ seconds: Int) -> String {
         let minutes = abs(seconds) / 60
         return seconds > 0 ? "in ritardo di \(minutes) min" : "in anticipo di \(minutes) min"
+    }
+}
+
+private struct StationNextPassage: Identifiable {
+    let stationName: String
+    let next: AstralDeparture?
+    var id: String { stationName }
+}
+
+/// Same delay/cancelled/replacement-bus presentation as the per-station
+/// schedule's own `AstralDepartureRow` (`PoleDetailSheet.swift`) — this list
+/// shows one train's line-wide itinerary rather than one station's several
+/// departures, so it can't share that view outright (no "Prossimo treno"
+/// badge here, every row already *is* the next one for its station), but the
+/// same ASTRAL fields deserve the same treatment rather than a bare time.
+private struct StationNextPassageRow: View {
+    let entry: StationNextPassage
+
+    var body: some View {
+        HStack {
+            Text(entry.stationName)
+                .font(.subheadline)
+            Spacer()
+            if let next = entry.next {
+                VStack(alignment: .trailing, spacing: 2) {
+                    HStack(spacing: 6) {
+                        if next.isReplacementBus {
+                            Image(systemName: "bus").foregroundStyle(.secondary)
+                        }
+                        Text(next.time)
+                            .font(.subheadline.weight(.semibold).monospacedDigit())
+                    }
+                    if next.isCancelled {
+                        Text("Soppressa")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 3)
+                            .background(Color.red, in: Capsule())
+                    } else if !delayText(next).isEmpty {
+                        Text(delayText(next))
+                            .font(.caption)
+                            .foregroundStyle(delayColor(next))
+                    }
+                }
+            } else {
+                Text("—")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
+        }
+    }
+
+    private func delayText(_ departure: AstralDeparture) -> String {
+        guard let minutes = departure.delayMinutes else { return "" }
+        if abs(minutes) < 1 { return "puntuale" }
+        return minutes > 0 ? "in ritardo di \(minutes) min" : "in anticipo di \(abs(minutes)) min"
+    }
+
+    private func delayColor(_ departure: AstralDeparture) -> Color {
+        guard let minutes = departure.delayMinutes else { return .secondary }
+        if abs(minutes) < 1 { return .secondary }
+        return minutes > 0 ? .red : .green
     }
 }

@@ -1,11 +1,11 @@
 import Foundation
 
-/// The 6 `codicePercorso` values accepted by Cotral's train-schedule widget
-/// endpoint (`cotralspa.it/wp-json/cotral/v1/get-train-stopsroute`) — one
-/// per direction of each of the 3 rail lines it covers. This is a
-/// completely separate, unrelated backend from PIV.do/Automezzi.do (see
-/// `CotralTrainScheduleClient`) and from GTFS's own `route_id`s — these
-/// codes only mean something to this one endpoint.
+/// The `codicePercorso` values ASTRAL's live-schedule API (and, before it,
+/// Cotral's now-retired train-schedule widget) key rail schedules by — one
+/// per direction of each rail line. This is a completely separate,
+/// unrelated identifier space from PIV.do/Automezzi.do and from GTFS's own
+/// `route_id`s — these codes only mean something to ASTRAL's API
+/// (`AstralTrainClient`).
 enum CotralTrainRoute: String, CaseIterable, Identifiable, Hashable {
     case metromareColomboToPortaSanPaolo = "RL_CC-PSP"
     case metromarePortaSanPaoloToColombo = "RL_PSP-CC"
@@ -13,6 +13,12 @@ enum CotralTrainRoute: String, CaseIterable, Identifiable, Hashable {
     case viterboUrbanaMontebelloToFlaminio = "RN_MONRM"
     case viterboExtraurbanaCatalanoToViterbo = "RV_CATVIT"
     case viterboExtraurbanaViterboToCatalano = "RV_VITCAT"
+    /// Morlupo-Catalano: a 4th direction pair for Roma-Viterbo Extraurbana,
+    /// apparently a partial/short-turn service — confirmed live via
+    /// `/api/fermate/RV_MORCAT`, missing from earlier versions of this enum
+    /// (built against the old cotralspa.it widget, which never listed it).
+    case morlupoToCatalano = "RV_MORCAT"
+    case catalanoToMorlupo = "RV_CATMOR"
 
     var id: String { rawValue }
 
@@ -22,7 +28,8 @@ enum CotralTrainRoute: String, CaseIterable, Identifiable, Hashable {
             return "Metromare"
         case .viterboUrbanaFlaminioToMontebello, .viterboUrbanaMontebelloToFlaminio:
             return "Roma-Viterbo Urbana"
-        case .viterboExtraurbanaCatalanoToViterbo, .viterboExtraurbanaViterboToCatalano:
+        case .viterboExtraurbanaCatalanoToViterbo, .viterboExtraurbanaViterboToCatalano,
+             .morlupoToCatalano, .catalanoToMorlupo:
             return "Roma-Viterbo Extraurbana"
         }
     }
@@ -35,6 +42,8 @@ enum CotralTrainRoute: String, CaseIterable, Identifiable, Hashable {
         case .viterboUrbanaMontebelloToFlaminio: return "Montebello → Flaminio"
         case .viterboExtraurbanaCatalanoToViterbo: return "Catalano → Viterbo"
         case .viterboExtraurbanaViterboToCatalano: return "Viterbo → Catalano"
+        case .morlupoToCatalano: return "Morlupo → Catalano"
+        case .catalanoToMorlupo: return "Catalano → Morlupo"
         }
     }
 
@@ -51,6 +60,8 @@ enum CotralTrainRoute: String, CaseIterable, Identifiable, Hashable {
         case .viterboUrbanaMontebelloToFlaminio: return "Flaminio"
         case .viterboExtraurbanaCatalanoToViterbo: return "Viterbo"
         case .viterboExtraurbanaViterboToCatalano: return "Catalano"
+        case .morlupoToCatalano: return "Catalano"
+        case .catalanoToMorlupo: return "Morlupo"
         }
     }
 
@@ -62,7 +73,9 @@ enum CotralTrainRoute: String, CaseIterable, Identifiable, Hashable {
         switch self {
         case .metromareColomboToPortaSanPaolo, .metromarePortaSanPaoloToColombo: return "ROMALIDO"
         case .viterboUrbanaFlaminioToMontebello, .viterboUrbanaMontebelloToFlaminio: return "RVURB"
-        case .viterboExtraurbanaCatalanoToViterbo, .viterboExtraurbanaViterboToCatalano: return "RVEXT"
+        case .viterboExtraurbanaCatalanoToViterbo, .viterboExtraurbanaViterboToCatalano,
+             .morlupoToCatalano, .catalanoToMorlupo:
+            return "RVEXT"
         }
     }
 
@@ -75,22 +88,27 @@ enum CotralTrainRoute: String, CaseIterable, Identifiable, Hashable {
         case .viterboUrbanaMontebelloToFlaminio: return .viterboUrbanaFlaminioToMontebello
         case .viterboExtraurbanaCatalanoToViterbo: return .viterboExtraurbanaViterboToCatalano
         case .viterboExtraurbanaViterboToCatalano: return .viterboExtraurbanaCatalanoToViterbo
+        case .morlupoToCatalano: return .catalanoToMorlupo
+        case .catalanoToMorlupo: return .morlupoToCatalano
         }
     }
 
-    /// Both directions of the line that GTFS route (by its
+    /// Every direction of the line that GTFS route (by its
     /// `route_short_name`) belongs to — used to go from a GTFS-derived rail
-    /// `Pole` to the codes this endpoint needs. GTFS's own rail
-    /// `stop_id`/`route_id` namespacing doesn't cleanly map here: both
-    /// Roma-Viterbo lines share the same "RN_" stop prefix (only the route
-    /// tells them apart), which is why this matches on the route instead of
-    /// the stop id (confirmed against the real rail `routes.txt`:
-    /// `ROMALIDO`/`RVEXT`/`RVURB`).
+    /// `Pole` to the codes ASTRAL needs. GTFS's own rail `stop_id`/
+    /// `route_id` namespacing doesn't cleanly map here: both Roma-Viterbo
+    /// Urbana/Extraurbana lines share stop-id prefixes (only the route tells
+    /// them apart, confirmed against the real rail `routes.txt`:
+    /// `ROMALIDO`/`RVEXT`/`RVURB`), and RVEXT alone now covers two distinct
+    /// direction *pairs* (the regular Catalano↔Viterbo service and the
+    /// Morlupo↔Catalano short-turn) — callers shouldn't assume exactly 2
+    /// results; try every candidate and keep whichever ones actually
+    /// resolve a station (see `AstralTrainRepository`).
     static func directions(forGTFSRouteShortName shortName: String) -> [CotralTrainRoute]? {
         switch shortName.uppercased() {
         case "ROMALIDO": return [.metromareColomboToPortaSanPaolo, .metromarePortaSanPaoloToColombo]
         case "RVURB": return [.viterboUrbanaFlaminioToMontebello, .viterboUrbanaMontebelloToFlaminio]
-        case "RVEXT": return [.viterboExtraurbanaCatalanoToViterbo, .viterboExtraurbanaViterboToCatalano]
+        case "RVEXT": return [.viterboExtraurbanaCatalanoToViterbo, .viterboExtraurbanaViterboToCatalano, .morlupoToCatalano, .catalanoToMorlupo]
         default: return nil
         }
     }

@@ -142,7 +142,8 @@ final class AtacRealtimeService: ObservableObject {
                         routeLabel: route?.routeShortName ?? routeId,
                         kind: route?.kind ?? .bus,
                         arrival: arrivalDate,
-                        delaySeconds: delaySeconds
+                        delaySeconds: delaySeconds,
+                        headsign: gtfsStore.headsign(forTripId: tripId)
                     )
                     byStop[stopTimeUpdate.stopID, default: []].append(prediction)
                 }

@@ -65,16 +65,53 @@ extension Transit {
         !tempoTransito.isEmpty ? tempoTransito : orarioPartenzaCorsa
     }
 
+    /// `displayTime` corrected for a reliable delay — Cotral's own
+    /// `tempoTransito`/`orarioPartenzaCorsa` are the *original scheduled*
+    /// time, built by `TransitsRepository` straight from Cotral's raw XML
+    /// completely independently of `ritardoSeconds` (the two are never
+    /// combined server-side or anywhere in this app until now), so showing
+    /// them bare next to a separate "in ritardo di N min" note makes the
+    /// reader do that addition themselves. This is what a rider actually
+    /// cares about: when the vehicle will really get there. Same
+    /// `abs(ritardoSeconds) >= 60` reliability threshold as the delay text
+    /// itself (`TransitRowView.delayText`) — under a minute isn't worth
+    /// adjusting for. Atac's `AtacStopPrediction.arrival` is deliberately
+    /// NOT given the same treatment: it already comes from GTFS-Realtime
+    /// `trip_updates`, which is by spec already the current best-known
+    /// predicted time, not a static schedule needing a delay bolted on.
+    var adjustedDisplayTime: String {
+        guard isDelayReliable, abs(ritardoSeconds) >= 60 else { return displayTime }
+        return Self.applyingDelay(to: displayTime, ritardoSeconds: ritardoSeconds)
+    }
+
     /// Whether "segui bus in tempo reale" should be offered for this run.
     var canTrackVehicle: Bool {
         monitorata == "1" && !(automezzo.codice ?? "").isEmpty
     }
 
-    /// Minutes from now until `displayTime`, handling the schedule's own
-    /// midnight-rollover convention (Cotral times can read e.g. "25:10" for a
-    /// trip after midnight). Nil if the time can't be parsed.
+    /// Minutes from now until `adjustedDisplayTime` (the real, delay-aware
+    /// arrival), handling the schedule's own midnight-rollover convention
+    /// (Cotral times can read e.g. "25:10" for a trip after midnight). Nil
+    /// if the time can't be parsed. Deliberately delay-aware rather than
+    /// reading the bare schedule: this single property backs the "tra N
+    /// min" label, the transit list's sort order, and
+    /// `PoleDetailViewModel`'s "already passed" filter — a run that's a
+    /// couple minutes late but genuinely still on its way must not look
+    /// "passed" just because its *original* schedule time has ticked by.
     var minutesFromNow: Int? {
-        Self.minutesFromNow(displayTime)
+        Self.minutesFromNow(adjustedDisplayTime)
+    }
+
+    /// "HH:MM" + a duration in seconds, wrapped to a 24h clock face (a
+    /// delay can push a time past midnight, or — for a run scheduled just
+    /// after midnight — a negative-looking wrap needs to land back in the
+    /// previous day's clock face; the double-modulo handles both).
+    private static func applyingDelay(to time: String, ritardoSeconds: Int) -> String {
+        let parts = time.split(separator: ":")
+        guard parts.count == 2, let h = Int(parts[0]), let m = Int(parts[1]) else { return time }
+        let totalSeconds = h * 3600 + m * 60 + ritardoSeconds
+        let wrapped = ((totalSeconds % 86400) + 86400) % 86400
+        return String(format: "%02d:%02d", wrapped / 3600, (wrapped % 3600) / 60)
     }
 
     static func minutesFromNow(_ time: String, now: Date = Date()) -> Int? {

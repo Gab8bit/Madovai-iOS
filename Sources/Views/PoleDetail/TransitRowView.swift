@@ -51,7 +51,7 @@ struct TransitRowView: View {
     }
 
     private var timeLabel: String {
-        transit.displayTime.isEmpty ? "--:--" : transit.displayTime
+        transit.displayTime.isEmpty ? "--:--" : transit.adjustedDisplayTime
     }
 
     private var relativeLabel: String? {

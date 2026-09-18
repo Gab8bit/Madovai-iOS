@@ -14,6 +14,7 @@ struct MapContainerView: UIViewRepresentable {
     let poles: [Pole]
     let favoritePoleCodes: Set<String>
     let vehicleCoordinate: CLLocationCoordinate2D?
+    let vehicleIsTreno: Bool
     let vehicleTrackingState: VehicleTrackingState
     let onSelectPole: (Pole) -> Void
 
@@ -109,14 +110,16 @@ struct MapContainerView: UIViewRepresentable {
             return
         }
 
+        let title = vehicleIsTreno ? "Treno in tempo reale" : "Bus in tempo reale"
         if let annotation = coordinator.vehicleAnnotation {
+            annotation.title = title
             if !annotation.coordinate.isApproximately(vehicleCoordinate) {
                 UIView.animate(withDuration: 1.0, delay: 0, options: [.curveEaseInOut]) {
                     annotation.coordinate = vehicleCoordinate
                 }
             }
         } else {
-            let annotation = VehicleAnnotation(coordinate: vehicleCoordinate, title: "Bus in tempo reale")
+            let annotation = VehicleAnnotation(coordinate: vehicleCoordinate, title: title)
             coordinator.vehicleAnnotation = annotation
             mapView.addAnnotation(annotation)
         }

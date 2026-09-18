@@ -8,6 +8,12 @@ import Foundation
 @MainActor
 final class VehicleTracker: ObservableObject {
     @Published private(set) var vehicleCode: String?
+    /// Whether the currently-followed vehicle is a train rather than a bus —
+    /// set once at the call site that starts following, which already knows
+    /// this from the pole/transit it came from (`Pole.isTreno`). Exists so
+    /// the tracking banner and map pin can say "treno"/"bus" correctly
+    /// instead of hardcoding "bus" for everything this tracker follows.
+    @Published private(set) var isTreno: Bool = false
     @Published private(set) var coordinate: CLLocationCoordinate2D?
     @Published private(set) var state: VehicleTrackingState = .idle
     @Published private(set) var lastUpdated: Date?
@@ -24,17 +30,18 @@ final class VehicleTracker: ObservableObject {
         vehicleCode == code
     }
 
-    func toggleFollowing(_ code: String) {
+    func toggleFollowing(_ code: String, isTreno: Bool = false) {
         if isFollowing(code) {
             stopFollowing()
         } else {
-            startFollowing(code)
+            startFollowing(code, isTreno: isTreno)
         }
     }
 
-    func startFollowing(_ code: String) {
+    func startFollowing(_ code: String, isTreno: Bool = false) {
         pollTask?.cancel()
         vehicleCode = code
+        self.isTreno = isTreno
         coordinate = nil
         state = .tracking
         consecutiveMisses = 0
@@ -51,6 +58,7 @@ final class VehicleTracker: ObservableObject {
         pollTask?.cancel()
         pollTask = nil
         vehicleCode = nil
+        isTreno = false
         coordinate = nil
         state = .idle
         consecutiveMisses = 0

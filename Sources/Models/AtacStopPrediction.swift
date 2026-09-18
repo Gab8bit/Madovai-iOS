@@ -14,6 +14,9 @@ struct AtacStopPrediction: Identifiable, Hashable {
     /// Always nil for a scheduled-fallback estimate.
     let delaySeconds: Int?
     var isScheduled: Bool = false
+    /// The trip's destination (e.g. "Anagnina"), when known — see
+    /// `AtacGtfsStore.headsign(forTripId:)`/`headsign(forRouteId:stopId:)`.
+    var headsign: String? = nil
 
     var id: String { tripId }
 

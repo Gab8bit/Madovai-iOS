@@ -17,6 +17,8 @@ final class AtacGtfsStore: ObservableObject {
 
     private var stops: [AtacStop] = []
     private var stopById: [String: AtacStop] = [:]
+    /// Keyed by trimmed `stopName` — see `stopsSharingName(with:)`.
+    private var stopsByName: [String: [AtacStop]] = [:]
     private var routes: [String: AtacRoute] = [:]
     private var shapes: [AtacLineShape] = []
     private var shapesByRouteId: [String: [AtacLineShape]] = [:]
@@ -26,6 +28,8 @@ final class AtacGtfsStore: ObservableObject {
     /// full per-stop schedule itself isn't also kept in memory.
     private var tripToRoute: [String: String] = [:]
     private var tripToService: [String: String] = [:]
+    private var tripToHeadsign: [String: String] = [:]
+    private var stopHeadsignByRoute: [String: String] = [:]
     private var activeServiceIdsByDate: [String: Set<String>] = [:]
 
     private let cacheDirectory: URL
@@ -77,6 +81,7 @@ final class AtacGtfsStore: ObservableObject {
 
             stops = parsed.stops
             stopById = Dictionary(parsed.stops.map { ($0.stopId, $0) }, uniquingKeysWith: { _, latest in latest })
+            stopsByName = Dictionary(grouping: parsed.stops) { $0.stopName.trimmingCharacters(in: .whitespaces) }
             routes = parsed.routes
             shapes = parsed.shapes
             shapesByRouteId = Dictionary(grouping: parsed.shapes, by: \.routeId)
@@ -89,6 +94,8 @@ final class AtacGtfsStore: ObservableObject {
             routeToStopIds = invertedRouteToStopIds
             tripToRoute = parsed.tripToRoute
             tripToService = parsed.tripToService
+            tripToHeadsign = parsed.tripToHeadsign
+            stopHeadsignByRoute = parsed.stopHeadsignByRoute
             activeServiceIdsByDate = parsed.activeServiceIdsByDate
             state = .ready
         } catch {
@@ -229,6 +236,43 @@ final class AtacGtfsStore: ObservableObject {
         return stopIds.compactMap { stopById[$0] }.sorted { $0.stopName < $1.stopName }
     }
 
+    /// The destination shown on a specific vehicle/trip (e.g. "Anagnina") —
+    /// nil if this trip was never seen in `trips.txt` (shouldn't normally
+    /// happen for a trip id the realtime feed itself just gave us) or had a
+    /// blank headsign.
+    func headsign(forTripId tripId: String) -> String? {
+        tripToHeadsign[tripId]
+    }
+
+    /// The destination of the trips of `routeId` that call at `stopId` —
+    /// stable per physical platform, since a stop_id practically always
+    /// serves one consistent direction for a given route (see
+    /// `AtacGtfsParsing.RouteMembership`'s doc comment). Used to label each
+    /// tab of a station's direction selector.
+    func headsign(forRouteId routeId: String, stopId: String) -> String? {
+        stopHeadsignByRoute["\(routeId)|\(stopId)"]
+    }
+
+    /// Any known headsign for this exact platform, regardless of route —
+    /// for callers with no specific line context (a bare map-pin tap or a
+    /// name search can both match a stop served by several routes), unlike
+    /// `headsign(forRouteId:stopId:)` above which needs one. A single
+    /// physical platform serves one direction of travel regardless of which
+    /// route calls at it, so any route's headsign for it is as good as
+    /// another.
+    func anyHeadsign(forStopId stopId: String) -> String? {
+        stopHeadsignByRoute.first { $0.key.hasSuffix("|\(stopId)") }?.value
+    }
+
+    /// Every platform sharing `stop`'s name, across the whole feed (not
+    /// viewport-scoped) — used to resolve a tapped map pin or search result
+    /// (which only ever carries one platform) back into its full station
+    /// group, so the detail sheet can offer the same direction picker the
+    /// "Linee" browser already has. See `groupedStopsByName`.
+    func stopsSharingName(with stop: AtacStop) -> [AtacStop] {
+        stopsByName[stop.stopName.trimmingCharacters(in: .whitespaces)] ?? [stop]
+    }
+
     /// Best-effort static-timetable fallback for a stop with no live
     /// `trip_updates` prediction at all — used by `AtacStopDetailSheet` only
     /// once it's confirmed the realtime feed has nothing for that stop.
@@ -278,7 +322,8 @@ final class AtacGtfsStore: ObservableObject {
                     kind: route?.kind ?? .bus,
                     arrival: midnight.addingTimeInterval(TimeInterval(departure.departureSeconds)),
                     delaySeconds: nil,
-                    isScheduled: true
+                    isScheduled: true,
+                    headsign: headsign(forRouteId: departure.routeId, stopId: stopId)
                 )
             }
     }

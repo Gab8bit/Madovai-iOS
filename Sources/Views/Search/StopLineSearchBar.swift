@@ -44,7 +44,7 @@ struct StopLineSearchBar: View {
                             ForEach(viewModel.routeResults) { route in
                                 resultRow(
                                     icon: route.iconName,
-                                    title: route.shortName,
+                                    title: route.displayName,
                                     subtitle: [route.subtitle, route.longName].filter { !$0.isEmpty }.joined(separator: " · ")
                                 ) {
                                     isFocused = false

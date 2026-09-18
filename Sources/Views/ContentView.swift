@@ -16,10 +16,15 @@ struct ContentView: View {
     @StateObject private var cotralViewportVehicles: CotralViewportVehicleService
 
     private let transitsRepository = TransitsRepository()
-    private let cotralTrainScheduleRepository = CotralTrainScheduleRepository()
+    private let astralTrainRepository = AstralTrainRepository()
 
     @State private var selectedPole: Pole?
-    @State private var selectedAtacStop: AtacStop?
+    /// The full station (every platform sharing its name, resolved via
+    /// `AtacGtfsStore.stopsSharingName(with:)`) behind whichever single
+    /// `AtacStop` a map pin, search result, or vehicle tap reported —
+    /// needed so `AtacStopDetailSheet` can offer its direction picker from
+    /// any entry point, not just the "Linee" browser's own station list.
+    @State private var selectedAtacStopGroup: AtacStopGroup?
     /// Opens the vehicle's detail sheet. Independent of `focusedRouteId`
     /// below on purpose (see its doc comment) — closing this sheet must NOT
     /// reset the focused line, only the explicit reset button does.
@@ -97,11 +102,12 @@ struct ContentView: View {
                 poles: focusedPoles,
                 favoritePoleCodes: favoritesStore.favoritePoleCodes,
                 vehicleCoordinate: vehicleTracker.coordinate,
+                vehicleIsTreno: vehicleTracker.isTreno,
                 vehicleTrackingState: vehicleTracker.state,
                 onSelectPole: { pole in selectedPole = pole },
                 atacStops: focusedAtacStops,
                 atacShapes: focusedShapes,
-                onSelectAtacStop: { stop in selectedAtacStop = stop },
+                onSelectAtacStop: { stop in selectAtacStopGroup(containing: stop) },
                 routeLookup: { routeId in
                     if let atacRoute = atacGtfsStore.route(for: routeId) { return atacRoute }
                     // A focused Cotral rail line's shape is drawn via the
@@ -140,7 +146,7 @@ struct ContentView: View {
                             selectedPole = mapViewModel.jumpTo(stop: stop)
                         case .atac(let stop):
                             mapViewModel.centerOn(atacStop: stop)
-                            selectedAtacStop = stop
+                            selectAtacStopGroup(containing: stop)
                         }
                     },
                     onSelectRoute: { result in
@@ -203,15 +209,20 @@ struct ContentView: View {
                 vehicleTracker: vehicleTracker,
                 transitsRepository: transitsRepository,
                 gtfsStore: gtfsStore,
-                cotralTrainScheduleRepository: cotralTrainScheduleRepository
+                astralTrainRepository: astralTrainRepository
             )
             .presentationDetents([.medium, .large])
             .presentationDragIndicator(.visible)
         }
-        .sheet(item: $selectedAtacStop) { stop in
-            AtacStopDetailSheet(stop: stop, realtimeService: atacRealtimeService, atacGtfsStore: atacGtfsStore)
-                .presentationDetents([.medium, .large])
-                .presentationDragIndicator(.visible)
+        .sheet(item: $selectedAtacStopGroup) { group in
+            AtacStopDetailSheet(
+                stops: group.stops,
+                routeId: isAtacFocus ? focusedRouteId : nil,
+                realtimeService: atacRealtimeService,
+                atacGtfsStore: atacGtfsStore
+            )
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
         }
         .sheet(item: $searchedCotralRoute) { route in
             NavigationView {
@@ -223,7 +234,7 @@ struct ContentView: View {
                     favoritesStore: favoritesStore,
                     vehicleTracker: vehicleTracker,
                     transitsRepository: transitsRepository,
-                    cotralTrainScheduleRepository: cotralTrainScheduleRepository
+                    astralTrainRepository: astralTrainRepository
                 )
             }
             .presentationDetents([.medium, .large])
@@ -232,10 +243,10 @@ struct ContentView: View {
         .sheet(item: $selectedVehicle) { vehicle in
             Group {
                 if vehicle.transitOperator == .cotral {
-                    CotralVehicleDetailSheet(vehicle: vehicle, scheduleRepository: cotralTrainScheduleRepository)
+                    CotralVehicleDetailSheet(vehicle: vehicle, astralTrainRepository: astralTrainRepository)
                         .presentationDetents([.medium, .large])
                 } else {
-                    AtacVehicleDetailSheet(vehicle: vehicle, realtimeService: atacRealtimeService)
+                    AtacVehicleDetailSheet(vehicle: vehicle, realtimeService: atacRealtimeService, atacGtfsStore: atacGtfsStore)
                         .presentationDetents([.medium, .large])
                 }
             }
@@ -258,7 +269,7 @@ struct ContentView: View {
                 favoritesStore: favoritesStore,
                 vehicleTracker: vehicleTracker,
                 transitsRepository: transitsRepository,
-                cotralTrainScheduleRepository: cotralTrainScheduleRepository
+                astralTrainRepository: astralTrainRepository
             )
         }
         .onAppear {
@@ -417,10 +428,22 @@ struct ContentView: View {
     /// While a line is focused, show only stops actually served by it
     /// (exact GTFS route<->stop membership) — otherwise unrelated stops
     /// from every other line clutter the isolated view for no reason.
+    /// Grouped by name to one pin per physical station (same idea as the
+    /// "Linee" browser's own station list) — a real station is often split
+    /// across several GTFS `stop_id`s, one per platform/direction, which
+    /// otherwise shows up as several near-identical pins on top of each
+    /// other (e.g. two "Colosseo" dots). Tapping one still resolves every
+    /// platform via `AtacGtfsStore.stopsSharingName(with:)`, not just this
+    /// representative one.
     private var focusedAtacStops: [AtacStop] {
-        guard let routeId = focusedRouteId else { return atacViewModel.visibleStops }
-        guard isAtacFocus else { return [] }
-        return atacGtfsStore.stopsForRoute(routeId)
+        let stops: [AtacStop]
+        if let routeId = focusedRouteId {
+            guard isAtacFocus else { return [] }
+            stops = atacGtfsStore.stopsForRoute(routeId)
+        } else {
+            stops = atacViewModel.visibleStops
+        }
+        return groupedStopsByName(stops).map(\.anchor)
     }
 
     /// While a line is focused, show only vehicles on that same line.
@@ -445,6 +468,16 @@ struct ContentView: View {
             mapViewModel.pendingCenter = location
         }
     }
+
+    /// A map pin or search result only ever carries the one `AtacStop` it
+    /// was built from (see `focusedAtacStops`'s doc comment for why that's
+    /// just a representative platform) — this resolves it back to every
+    /// platform sharing its name before opening the sheet, so the direction
+    /// picker is available from any entry point.
+    private func selectAtacStopGroup(containing stop: AtacStop) {
+        let stops = atacGtfsStore.stopsSharingName(with: stop)
+        selectedAtacStopGroup = AtacStopGroup(name: stop.stopName.trimmingCharacters(in: .whitespaces), stops: stops)
+    }
 }
 
 /// Owns a `PoleDetailViewModel` scoped to wherever this is presented from
@@ -464,14 +497,14 @@ struct PoleDetailSheetContainer: View {
         vehicleTracker: VehicleTracker,
         transitsRepository: TransitsRepository,
         gtfsStore: GTFSStore,
-        cotralTrainScheduleRepository: CotralTrainScheduleRepository
+        astralTrainRepository: AstralTrainRepository
     ) {
         _viewModel = StateObject(wrappedValue: PoleDetailViewModel(
             pole: pole,
             vehicleTracker: vehicleTracker,
             transitsRepository: transitsRepository,
             gtfsStore: gtfsStore,
-            cotralTrainScheduleRepository: cotralTrainScheduleRepository
+            astralTrainRepository: astralTrainRepository
         ))
         self.favoritesStore = favoritesStore
         self.vehicleTracker = vehicleTracker

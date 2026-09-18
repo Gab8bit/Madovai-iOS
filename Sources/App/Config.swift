@@ -35,10 +35,17 @@ enum Config {
     static let gtfsBusZipURL = URL(string: "http://travel.mob.cotralspa.it:7777/GTFS/GTFS_COTRAL.zip")!
     static let gtfsRailZipURL = URL(string: "http://travel.mob.cotralspa.it:7777/GTFS/GTFS_FERRO.zip")!
 
-    /// Cotral's train-schedule widget endpoint — a separate WordPress-hosted
-    /// backend (`cotralspa.it`, HTTPS, no ATS exception needed), unrelated
-    /// to `cotralBaseURL` above. See `CotralTrainScheduleClient`.
-    static let cotralTrainScheduleBaseURL = URL(string: "https://cotralspa.it/wp-json/cotral/v1/get-train-stopsroute")!
+    /// ASTRAL (Azienda Strade Lazio, the regional infrastructure agency —
+    /// unrelated to Cotral) runs a separate, public, unauthenticated JSON API
+    /// that is the primary source for Cotral's 3 rail lines' schedules and
+    /// live delays — PIV.do can silently omit a real, currently-running
+    /// train (confirmed via field-testing: a reinforcement run never
+    /// appeared in two consecutive PIV.do polls, live or scheduled, while
+    /// this API had it with a real delay). See `AstralTrainClient`. Replaces
+    /// the old cotralspa.it widget endpoint entirely — that one never gave a
+    /// real per-run delay (always "In orario"), so ASTRAL is a strict
+    /// upgrade, not just an alternative.
+    static let astralBaseURL = URL(string: "https://gestionecorse.astralspa.it/api")!
 
     /// Timeout for a single network request.
     static let requestTimeout: TimeInterval = 15

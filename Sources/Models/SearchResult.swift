@@ -60,6 +60,19 @@ enum SearchRouteResult: Identifiable, Hashable {
         }
     }
 
+    /// `shortName`/`longName` stay the raw GTFS values (used for search
+    /// matching and sorting by the code someone might actually type, e.g.
+    /// "MEA"); this is what to actually show a reader — Rome's 4 metro
+    /// lines get a real name instead of a bare code they don't recognize
+    /// (`route_long_name` is blank for all 4 in this feed, see
+    /// `AtacMetroLine`), everything else is unchanged.
+    var displayName: String {
+        switch self {
+        case .cotral(let route): return route.routeShortName
+        case .atac(let route): return route.friendlyName
+        }
+    }
+
     var subtitle: String {
         switch self {
         case .cotral(let route): return route.isRail ? "Cotral · treno" : "Cotral"

@@ -3,8 +3,8 @@ import SwiftUI
 /// Standalone line browser, no map — pick a line, see its live vehicles and
 /// stops. Limited to lines where that's actually meaningful: Atac/Roma TPL
 /// (full live fleet + stop predictions) and Cotral's rail lines (tapping a
-/// station opens the same 3-tier schedule view as tapping its pole on the
-/// map — live PIV.do when Cotral has it, otherwise a schedule; see
+/// station opens the same schedule view as tapping its pole on the map —
+/// ASTRAL's live schedule, falling back to static GTFS; see
 /// `PoleDetailViewModel.scheduledDeparturesByDirection`). Cotral's ~4000 bus
 /// routes are deliberately left out: with no per-line live data for them,
 /// a list that size wouldn't be very browsable and would dominate the screen.
@@ -15,7 +15,7 @@ struct LineeListView: View {
     @ObservedObject var favoritesStore: FavoritesStore
     @ObservedObject var vehicleTracker: VehicleTracker
     let transitsRepository: TransitsRepository
-    let cotralTrainScheduleRepository: CotralTrainScheduleRepository
+    let astralTrainRepository: AstralTrainRepository
 
     @State private var query = ""
 
@@ -84,7 +84,7 @@ struct LineeListView: View {
             favoritesStore: favoritesStore,
             vehicleTracker: vehicleTracker,
             transitsRepository: transitsRepository,
-            cotralTrainScheduleRepository: cotralTrainScheduleRepository
+            astralTrainRepository: astralTrainRepository
         )
     }
 }
@@ -98,7 +98,7 @@ private struct LineRow: View {
                 .foregroundStyle(Color.accentColor)
                 .frame(width: 22)
             VStack(alignment: .leading, spacing: 2) {
-                Text(route.shortName).font(.subheadline.weight(.semibold))
+                Text(route.displayName).font(.subheadline.weight(.semibold))
                 if !route.longName.isEmpty {
                     Text(route.longName).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 }

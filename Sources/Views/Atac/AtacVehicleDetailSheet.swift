@@ -7,10 +7,23 @@ import SwiftUI
 struct AtacVehicleDetailSheet: View {
     let vehicle: TransitVehicle
     @ObservedObject var realtimeService: AtacRealtimeService
+    let atacGtfsStore: AtacGtfsStore
 
     private var stops: [AtacTripStopTime] {
         guard let tripId = vehicle.tripId else { return [] }
         return realtimeService.tripStopTimes[tripId] ?? []
+    }
+
+    /// "Metro A" for a metro line, otherwise the plain route number — the
+    /// live feed only ever hands us a bare route id/short name, never a
+    /// full `AtacRoute`, so this needs no store lookup, just the same
+    /// hand-written metro mapping used elsewhere.
+    private var lineLabel: String {
+        AtacMetroLine(routeShortName: liveVehicle.routeLabel ?? "")?.friendlyName ?? (liveVehicle.routeLabel ?? "—")
+    }
+
+    private var headsign: String? {
+        vehicle.tripId.flatMap { atacGtfsStore.headsign(forTripId: $0) }
     }
 
     /// Re-resolves the live vehicle each refresh (position/delay can change
@@ -45,7 +58,7 @@ struct AtacVehicleDetailSheet: View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 6) {
                 Image(systemName: liveVehicle.kind.sfSymbolName)
-                Text("Linea \(liveVehicle.routeLabel ?? "—")")
+                Text(headsign.map { "Linea \(lineLabel) verso \($0)" } ?? "Linea \(lineLabel)")
                     .font(.title3.bold())
             }
             Text("\(liveVehicle.transitOperator.rawValue) · tempo reale")

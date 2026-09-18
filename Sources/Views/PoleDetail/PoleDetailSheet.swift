@@ -10,7 +10,6 @@ struct PoleDetailSheetBody: View {
     @ObservedObject var favoritesStore: FavoritesStore
     @ObservedObject var vehicleTracker: VehicleTracker
     @State private var selectedDirection: String?
-    @State private var selectedLiveDirection: CotralTrainRoute?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -56,6 +55,17 @@ struct PoleDetailSheetBody: View {
 
     @ViewBuilder
     private var content: some View {
+        if viewModel.pole.isTreno {
+            railContent
+        } else {
+            busContent
+        }
+    }
+
+    /// Cotral bus poles: unchanged — live PIV.do transits, with "Segui" to
+    /// track a vehicle on the map.
+    @ViewBuilder
+    private var busContent: some View {
         switch viewModel.state {
         case .idle, .loading:
             if viewModel.transits.isEmpty {
@@ -63,21 +73,52 @@ struct PoleDetailSheetBody: View {
                 LoadingOverlay(message: "Carico i transiti…")
                 Spacer()
             } else {
-                liveTransitsContent
+                transitList
             }
         case .loaded:
-            liveTransitsContent
+            transitList
         case .empty:
+            Spacer()
+            EmptyStateView(
+                systemImage: "clock.badge.questionmark",
+                title: "Nessun transito disponibile",
+                message: "Riprova più tardi o controlla un'altra palina."
+            )
+            Spacer()
+        case .error(let message):
+            Spacer()
+            EmptyStateView(systemImage: "wifi.exclamationmark", title: "Errore", message: message)
+            Spacer()
+        }
+    }
+
+    /// Cotral rail poles: ASTRAL's schedule (real per-run delay,
+    /// cancellations, replacement-bus service — see
+    /// `PoleDetailViewModel.scheduledDeparturesByDirection`), falling back
+    /// to the static GTFS timetable only if ASTRAL has nothing at all for
+    /// this station. No "Segui" here — ASTRAL has no vehicle/GPS data to
+    /// follow (a moving train marker on the map, when PIV.do happens to
+    /// have one, is still followable from there, unaffected by this).
+    @ViewBuilder
+    private var railContent: some View {
+        switch viewModel.state {
+        case .idle, .loading:
             if let directions = viewModel.scheduledDeparturesByDirection, !directions.isEmpty {
-                scheduledDeparturesView(directions)
+                railScheduleView(directions)
+            } else {
+                Spacer()
+                LoadingOverlay(message: "Carico gli orari…")
+                Spacer()
+            }
+        case .loaded, .empty:
+            if let directions = viewModel.scheduledDeparturesByDirection, !directions.isEmpty {
+                railScheduleView(directions)
             } else {
                 Spacer()
                 EmptyStateView(
                     systemImage: "clock.badge.questionmark",
                     title: "Nessun transito disponibile",
-                    message: viewModel.pole.isTreno
-                        ? "Al momento Cotral non ha transiti in tempo reale per questa stazione, e non risultano corse programmate per il resto di oggi."
-                        : "Riprova più tardi o controlla un'altra palina."
+                    message: "Al momento non risultano corse per questa stazione, in tempo reale né programmate, per il resto di oggi."
                 )
                 Spacer()
             }
@@ -88,27 +129,27 @@ struct PoleDetailSheetBody: View {
         }
     }
 
-    /// Shown when Cotral's live PIV.do has nothing for this stop right now
-    /// (tier 1 of the fallback failed) — a schedule instead, from either the
-    /// cotralspa.it widget or the static GTFS timetable (see
-    /// `PoleDetailViewModel.scheduledDeparturesByDirection`). Neither
-    /// source is genuinely live (the widget's own "realtime" naming is
-    /// misleading — every sample ever seen just says "In orario"), so both
-    /// get the same honest "not live" labeling here — already filtered to
-    /// what's still ahead of the current time, split by direction with a
-    /// segmented control when there's more than one, and the very next
-    /// departure of the selected direction called out explicitly.
-    private func scheduledDeparturesView(_ directions: [TrainScheduleDirection]) -> some View {
+    private func railScheduleView(_ directions: [AstralScheduleDirection]) -> some View {
         let current = directions.first { $0.destination == selectedDirection } ?? directions[0]
+        // A direction whose entries carry no known delay at all is one that
+        // fell through to the static-GTFS tier (ASTRAL couldn't resolve
+        // this station) — genuine ASTRAL data almost always has a delay
+        // figure even when it's "0" (confirmed live: only a just-inserted
+        // reinforcement run briefly has none), so this is a reliable enough
+        // signal to label the two cases honestly without threading a
+        // separate "which tier" flag through the view model.
+        let isEstimate = !current.entries.contains { $0.delayMinutes != nil }
 
         return VStack(spacing: 0) {
-            Label("Orari da tabella, non in tempo reale", systemImage: "calendar")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal)
-                .padding(.vertical, 8)
-                .background(Color.secondary.opacity(0.08))
+            if isEstimate {
+                Label("Orario stimato da tabella, non in tempo reale", systemImage: "calendar")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal)
+                    .padding(.vertical, 8)
+                    .background(Color.secondary.opacity(0.08))
+            }
 
             if directions.count > 1 {
                 Picker("Direzione", selection: Binding(
@@ -142,68 +183,11 @@ struct PoleDetailSheetBody: View {
             } else {
                 let nextId = current.entries.first?.id
                 List(current.entries) { departure in
-                    HStack {
-                        Text(departure.time)
-                            .font(.headline.monospacedDigit())
-                        if departure.id == nextId {
-                            Text("Prossimo treno")
-                                .font(.caption2.weight(.semibold))
-                                .foregroundStyle(.white)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 3)
-                                .background(Color.accentColor, in: Capsule())
-                        }
-                        Spacer()
-                    }
-                    .listRowSeparator(.hidden)
+                    AstralDepartureRow(departure: departure, isNext: departure.id == nextId)
+                        .listRowSeparator(.hidden)
                 }
                 .listStyle(.plain)
             }
-        }
-    }
-
-    /// Live transits (tier 1) — split by direction for a Cotral rail pole
-    /// when every current transit's `percorso` resolves to a known route
-    /// (see `PoleDetailViewModel.liveTransitsByDirection`), otherwise the
-    /// plain unsplit list (buses, or a rail percorso this app doesn't
-    /// recognize).
-    @ViewBuilder
-    private var liveTransitsContent: some View {
-        if let directions = viewModel.liveTransitsByDirection, directions.count > 1 {
-            liveTransitDirectionsView(directions)
-        } else {
-            transitList
-        }
-    }
-
-    private func liveTransitDirectionsView(_ directions: [(route: CotralTrainRoute, transits: [Transit])]) -> some View {
-        let current = directions.first { $0.route == selectedLiveDirection } ?? directions[0]
-
-        return VStack(spacing: 0) {
-            Picker("Direzione", selection: Binding(
-                get: { selectedLiveDirection ?? directions[0].route },
-                set: { selectedLiveDirection = $0 }
-            )) {
-                ForEach(directions, id: \.route) { direction in
-                    Text(direction.route.destinationName).tag(direction.route)
-                }
-            }
-            .pickerStyle(.segmented)
-            .padding(.horizontal)
-            .padding(.top, 8)
-
-            List(current.transits) { transit in
-                TransitRowView(
-                    transit: transit,
-                    isFollowing: vehicleTracker.isFollowing(transit.automezzo.codice ?? ""),
-                    onToggleFollow: {
-                        guard let code = transit.automezzo.codice else { return }
-                        vehicleTracker.toggleFollowing(code)
-                    }
-                )
-                .listRowSeparator(.hidden)
-            }
-            .listStyle(.plain)
         }
     }
 
@@ -214,7 +198,7 @@ struct PoleDetailSheetBody: View {
                 isFollowing: vehicleTracker.isFollowing(transit.automezzo.codice ?? ""),
                 onToggleFollow: {
                     guard let code = transit.automezzo.codice else { return }
-                    vehicleTracker.toggleFollowing(code)
+                    vehicleTracker.toggleFollowing(code, isTreno: viewModel.pole.isTreno)
                 }
             )
             .listRowSeparator(.hidden)
@@ -229,7 +213,7 @@ struct PoleDetailSheetBody: View {
                 Image(systemName: "location.fill")
                     .foregroundStyle(.orange)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text("Seguendo bus \(vehicleCode)")
+                    Text("Seguendo \(vehicleTracker.isTreno ? "treno" : "bus") \(vehicleCode)")
                         .font(.footnote.weight(.semibold))
                     Text("Posizione aggiornata ogni \(Int(Config.vehiclePositionPollInterval))s")
                         .font(.caption2)
@@ -266,5 +250,105 @@ struct PoleDetailSheetBody: View {
         case .lost: return Color.red.opacity(0.12)
         default: return Color.orange.opacity(0.12)
         }
+    }
+}
+
+/// Same time/status layout as `TransitRowView` on the PIV.do/bus side (big
+/// time + "tra N min" on the left, a colored status dot + delay text in the
+/// middle) so a rail row doesn't read as a stripped-down version of a bus
+/// one — ASTRAL just fills in different fields (no destination here, it's
+/// already shown once above via the direction picker; no vehicle to follow).
+private struct AstralDepartureRow: View {
+    let departure: AstralDeparture
+    let isNext: Bool
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(departure.time)
+                    .font(.title3.bold().monospacedDigit())
+                if let relative = relativeLabel {
+                    Text(relative)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .frame(width: 64, alignment: .leading)
+
+            VStack(alignment: .leading, spacing: 4) {
+                statusRow
+                if departure.isReplacementBus {
+                    Label("Bus sostitutivo", systemImage: "bus")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Spacer(minLength: 0)
+
+            if departure.isCancelled {
+                Text("Soppressa")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(Color.red, in: Capsule())
+            } else if isNext {
+                Text("Prossimo treno")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(Color.accentColor, in: Capsule())
+            }
+        }
+        .opacity(departure.isCancelled ? 0.6 : 1)
+        .padding(.vertical, 6)
+    }
+
+    private var relativeLabel: String? {
+        guard let minutes = Transit.minutesFromNow(departure.time) else { return nil }
+        if minutes <= 0 { return "in arrivo" }
+        if minutes == 1 { return "tra 1 min" }
+        return "tra \(minutes) min"
+    }
+
+    /// Mirrors `TransitRowView.statusRow`'s colored-dot + label shape:
+    /// green when ASTRAL reported a real delay (even 0, i.e. "puntuale"),
+    /// gray when this entry has none — either the static-GTFS fallback tier,
+    /// or a just-inserted reinforcement run ASTRAL hasn't computed one for
+    /// yet. Nothing shown for a cancelled run; the trailing "Soppressa" tag
+    /// already covers that.
+    @ViewBuilder
+    private var statusRow: some View {
+        if departure.isCancelled {
+            EmptyView()
+        } else if let minutes = departure.delayMinutes {
+            HStack(spacing: 4) {
+                Circle().fill(Color.green).frame(width: 7, height: 7)
+                Text(delayText(minutes))
+                    .font(.caption)
+                    .foregroundStyle(delayColor(minutes))
+            }
+        } else {
+            HStack(spacing: 4) {
+                Circle().fill(Color.gray).frame(width: 7, height: 7)
+                Text("Schedulata, no real-time")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    /// A difference under a minute isn't worth surfacing — same threshold
+    /// as `TransitRowView.delayText` on the PIV.do/bus side.
+    private func delayText(_ minutes: Int) -> String {
+        if abs(minutes) < 1 { return "puntuale" }
+        return minutes > 0 ? "in ritardo di \(minutes) min" : "in anticipo di \(abs(minutes)) min"
+    }
+
+    private func delayColor(_ minutes: Int) -> Color {
+        if abs(minutes) < 1 { return .secondary }
+        return minutes > 0 ? .red : .green
     }
 }
