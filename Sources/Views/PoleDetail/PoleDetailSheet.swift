@@ -263,7 +263,7 @@ private struct AstralDepartureRow: View {
     let isNext: Bool
 
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
+        HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(departure.time)
                     .font(.title3.bold().monospacedDigit())
@@ -324,17 +324,19 @@ private struct AstralDepartureRow: View {
         if departure.isCancelled {
             EmptyView()
         } else if let minutes = departure.delayMinutes {
-            HStack(spacing: 4) {
-                Circle().fill(Color.green).frame(width: 7, height: 7)
+            HStack(spacing: 6) {
+                PulsingDot(color: .green)
                 Text(delayText(minutes))
-                    .font(.caption)
+                    .font(.subheadline.weight(.semibold))
                     .foregroundStyle(delayColor(minutes))
+                    .contentTransition(.numericText())
+                    .animation(.easeInOut, value: minutes)
             }
         } else {
-            HStack(spacing: 4) {
+            HStack(spacing: 6) {
                 Circle().fill(Color.gray).frame(width: 7, height: 7)
-                Text("Schedulata, no real-time")
-                    .font(.caption)
+                Text("Schedulata")
+                    .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.secondary)
             }
         }
@@ -343,12 +345,32 @@ private struct AstralDepartureRow: View {
     /// A difference under a minute isn't worth surfacing — same threshold
     /// as `TransitRowView.delayText` on the PIV.do/bus side.
     private func delayText(_ minutes: Int) -> String {
-        if abs(minutes) < 1 { return "puntuale" }
-        return minutes > 0 ? "in ritardo di \(minutes) min" : "in anticipo di \(abs(minutes)) min"
+        if abs(minutes) < 1 { return "Puntuale" }
+        return minutes > 0 ? "In ritardo di \(minutes) min" : "In anticipo di \(abs(minutes)) min"
     }
 
     private func delayColor(_ minutes: Int) -> Color {
         if abs(minutes) < 1 { return .secondary }
         return minutes > 0 ? .red : .green
+    }
+}
+
+/// A softly breathing dot marking data as genuinely live (ASTRAL-sourced),
+/// distinct from the still gray dot used for the static-GTFS fallback tier.
+private struct PulsingDot: View {
+    let color: Color
+    @State private var isPulsing = false
+
+    var body: some View {
+        Circle()
+            .fill(color)
+            .frame(width: 7, height: 7)
+            .scaleEffect(isPulsing ? 1.5 : 1)
+            .opacity(isPulsing ? 0.5 : 1)
+            .onAppear {
+                withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) {
+                    isPulsing = true
+                }
+            }
     }
 }

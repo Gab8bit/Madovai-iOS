@@ -115,13 +115,19 @@ final class CotralViewportVehicleService: ObservableObject {
                           let coordinate = positions.first?.latestCoordinate
                     else { return nil }
                     let routeId = transit.percorso.isEmpty ? nil : transit.percorso
+                    // PIV.do's `percorso` doubles as ASTRAL's `codicePercorso`
+                    // for a rail run (e.g. "RL_PSP-CC") — recognizing one
+                    // here means a train marker gets the train glyph/kind
+                    // instead of silently defaulting to `.bus` like every
+                    // actual Cotral bus also does.
+                    let kind: TransitVehicleKind = routeId.flatMap(CotralTrainRoute.init(rawValue:)) != nil ? .treno : .bus
                     return TransitVehicle(
                         id: "cotral-\(code)",
                         coordinate: coordinate,
                         bearing: nil,
                         routeId: routeId,
                         routeLabel: routeId,
-                        kind: .bus,
+                        kind: kind,
                         transitOperator: .cotral,
                         scope: .visibleAreaOnly,
                         delaySeconds: transit.isDelayReliable ? transit.ritardoSeconds : nil,

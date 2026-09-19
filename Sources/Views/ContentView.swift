@@ -44,6 +44,14 @@ struct ContentView: View {
     @State private var showInfo = false
     @State private var showLinee = false
     @State private var hasRequestedLocation = false
+    /// Guards the map's one-time initial recenter onto the user's own
+    /// location (see the `onChange` below) — a dedicated flag rather than
+    /// checking `mapViewModel.poles.isEmpty`, which used to cause the same
+    /// recenter to keep firing on every later location update whenever the
+    /// user panned/drove somewhere with no nearby poles (poles is
+    /// viewport-scoped and legitimately empty in that case), fighting any
+    /// attempt to pan the map away from the user while moving.
+    @State private var hasCenteredOnUserOnce = false
     @State private var hasStartedRealtimePolling = false
 
     init() {
@@ -284,9 +292,12 @@ struct ContentView: View {
             cotralViewportVehicles.startPolling()
         }
         .onChange(of: locationManager.currentLocation) { newLocation in
-            guard let newLocation, mapViewModel.poles.isEmpty else { return }
+            guard let newLocation, !hasCenteredOnUserOnce else { return }
             // Only used to get the very first viewport oriented — after
-            // that, poles/stops/lines all track wherever the user pans.
+            // that, poles/stops/lines all track wherever the user pans, and
+            // recentering again only happens via the explicit "my location"
+            // button (`reloadAroundUserOrLastPole`).
+            hasCenteredOnUserOnce = true
             mapViewModel.pendingCenter = newLocation
         }
         .onChange(of: viewportState.settledBounds) { bounds in
