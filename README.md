@@ -2,6 +2,8 @@
 
 Client SwiftUI (iOS 16+) per bus/treni Cotral (extraurbano Lazio) **e** bus/tram/metro Atac + Roma TPL (urbano Roma), su un'unica mappa. Nome dell'app: **Madovai** ("ma dove vai?"), bundle id `dev.gab8bit.madovai`; il progetto/repo mantiene il nome storico `CotralLive-iOS`/`CotralLive.xcodeproj` — non rinominato per evitare di rompere riferimenti interni, solo cosmetica esterna (nome app, icona, bundle id) è cambiata.
 
+> **Versione Android.** Esiste anche un port Android nativo (Kotlin + Jetpack Compose, Material You) con gli stessi dati e lo stesso comportamento: [github.com/Gab8bit/Madovai-Android](https://github.com/Gab8bit/Madovai-Android), con la sua pagina di presentazione e download dell'APK su [gab8bit.github.io/Madovai-Android](https://gab8bit.github.io/Madovai-Android/).
+
 L'app parla **direttamente** con l'endpoint interno di Cotral (lo stesso che [`ChromuSx/cotral`](https://github.com/ChromuSx/cotral) proxava da un server Node) e con i feed pubblici GTFS/GTFS-Realtime di entrambe le fonti — non c'è nessun backend da self-hostare.
 
 ## Come funziona
