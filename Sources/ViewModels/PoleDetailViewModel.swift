@@ -191,8 +191,19 @@ final class PoleDetailViewModel: ObservableObject {
     /// is missing.
     private func mergedPole(base: Pole, update: Pole) -> Pole {
         Pole(
-            codicePalina: update.codicePalina ?? base.codicePalina,
-            codiceStop: update.codiceStop ?? base.codiceStop,
+            // `base` is always GTFS-derived (`PolesRepository`) and always
+            // already has both of these — PIV.do's own `<codice>` is a
+            // separate, unrelated id namespace (same gotcha as ASTRAL's own
+            // fermata codes vs PIV.do's), not a more-authoritative version
+            // of the same one. Letting `update` win here used to silently
+            // swap a pole's id mid-session once its first live refresh
+            // landed, which broke `FavoritesStore` (keyed by `codicePalina`)
+            // — favoriting the same station before vs. after that swap
+            // stored two different codes for it, showing up as a
+            // duplicate entry in "Preferiti" that toggling on/off again
+            // couldn't remove (its code doesn't match either stored one).
+            codicePalina: base.codicePalina ?? update.codicePalina,
+            codiceStop: base.codiceStop ?? update.codiceStop,
             nomePalina: update.nomePalina ?? base.nomePalina,
             nomeStop: update.nomeStop ?? base.nomeStop,
             localita: update.localita ?? base.localita,

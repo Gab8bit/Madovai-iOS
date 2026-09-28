@@ -24,7 +24,16 @@ struct DataLoadingBanner: View {
             ForEach(items) { item in
                 row(for: item)
             }
-            Text("Percorsi, linee e altri dati potrebbero non essere ancora disponibili finché il download non è completo.")
+            // Phase-agnostic on purpose — this banner also shows during
+            // `.parsing` (which runs on *every* launch, cache or not, to
+            // turn the already-downloaded GTFS files back into in-memory
+            // models) and `.extracting`, not just `.downloading`. Naming
+            // "download" specifically here made every ordinary relaunch
+            // look like a fresh download even when the cache was reused
+            // untouched (confirmed live: file mtimes unchanged across a
+            // terminate+relaunch cycle) — each row's own `phaseLabel`
+            // already says which phase is actually active.
+            Text("Percorsi, linee e altri dati potrebbero non essere ancora disponibili finché il caricamento non è completo.")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
         }

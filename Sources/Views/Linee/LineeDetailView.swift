@@ -14,7 +14,7 @@ struct LineeDetailView: View {
         Group {
             switch route {
             case .atac(let atacRoute):
-                AtacLineDetail(route: atacRoute, atacGtfsStore: atacGtfsStore, atacRealtimeService: atacRealtimeService)
+                AtacLineDetail(route: atacRoute, atacGtfsStore: atacGtfsStore, atacRealtimeService: atacRealtimeService, favoritesStore: favoritesStore)
             case .cotral(let gtfsRoute):
                 CotralRailLineDetail(
                     route: gtfsRoute,
@@ -60,6 +60,7 @@ private struct AtacLineDetail: View {
     let route: AtacRoute
     @ObservedObject var atacGtfsStore: AtacGtfsStore
     @ObservedObject var atacRealtimeService: AtacRealtimeService
+    @ObservedObject var favoritesStore: FavoritesStore
     @State private var selectedStation: AtacStopGroup?
 
     private var vehicles: [TransitVehicle] {
@@ -125,9 +126,15 @@ private struct AtacLineDetail: View {
         }
         .listStyle(.insetGrouped)
         .sheet(item: $selectedStation) { station in
-            AtacStopDetailSheet(stops: station.stops, routeId: route.routeId, realtimeService: atacRealtimeService, atacGtfsStore: atacGtfsStore)
-                .presentationDetents([.medium, .large])
-                .presentationDragIndicator(.visible)
+            AtacStopDetailSheet(
+                stops: station.stops,
+                routeId: route.routeId,
+                realtimeService: atacRealtimeService,
+                atacGtfsStore: atacGtfsStore,
+                favoritesStore: favoritesStore
+            )
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
         }
     }
 }

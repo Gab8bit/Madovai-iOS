@@ -2,6 +2,11 @@ import CoreLocation
 import MapKit
 import SwiftUI
 
+/// The app's 3 top-level sections, each its own `TabView` panel.
+private enum RootTab: Hashable {
+    case map, linee, preferiti
+}
+
 struct ContentView: View {
     @StateObject private var gtfsStore: GTFSStore
     @StateObject private var mapViewModel: MapViewModel
@@ -40,9 +45,8 @@ struct ContentView: View {
     /// navigation stack here to push onto, so this is presented as a sheet
     /// instead.
     @State private var searchedCotralRoute: SearchRouteResult?
-    @State private var showFavorites = false
     @State private var showInfo = false
-    @State private var showLinee = false
+    @State private var selectedTab: RootTab = .map
     @State private var hasRequestedLocation = false
     /// Guards the map's one-time initial recenter onto the user's own
     /// location (see the `onChange` below) — a dedicated flag rather than
@@ -72,21 +76,57 @@ struct ContentView: View {
     }
 
     var body: some View {
-        // The map is shown immediately and stays usable while both GTFS
-        // stores load in the background — poles/lines/stops simply appear
-        // as each store finishes, rather than blocking the whole app behind
-        // a loading screen the way this used to work. `dataLoadingBanner`
-        // communicates what's still missing meanwhile.
-        mapScreen
-            .task {
-                await gtfsStore.ensureLoaded()
-            }
-            .task {
-                // Independent of Cotral's own GTFS load — Atac/Roma TPL is an
-                // additional overlay, not a blocking requirement. If it fails,
-                // the app should still work fine for Cotral alone.
-                await atacGtfsStore.ensureLoaded()
-            }
+        // Three top-level sections in a plain bottom `TabView` — per the
+        // HIG's own tab bar guidance, a standard system tab bar (not a
+        // hand-rolled floating panel) is what actually picks up the
+        // platform's current bottom-bar material for free; hand-rolling a
+        // custom bar for the same visual only fights the system anytime
+        // that material changes. The map is shown immediately and stays
+        // usable while both GTFS stores load in the background —
+        // poles/lines/stops simply appear as each store finishes, rather
+        // than blocking the whole app behind a loading screen the way this
+        // used to work. `dataLoadingBanner` communicates what's still
+        // missing meanwhile. Both `.task`s live at this top level, not
+        // inside `mapScreen`, so the load starts regardless of which tab is
+        // showing first and isn't repeated if the user switches tabs.
+        TabView(selection: $selectedTab) {
+            mapScreen
+                .tabItem { Label("Mappa", systemImage: "map") }
+                .tag(RootTab.map)
+
+            LineeListView(
+                atacGtfsStore: atacGtfsStore,
+                atacRealtimeService: atacRealtimeService,
+                gtfsStore: gtfsStore,
+                favoritesStore: favoritesStore,
+                vehicleTracker: vehicleTracker,
+                transitsRepository: transitsRepository,
+                astralTrainRepository: astralTrainRepository
+            )
+            .tabItem { Label("Linee", systemImage: "list.bullet") }
+            .tag(RootTab.linee)
+
+            FavoritesListView(
+                favoritesStore: favoritesStore,
+                atacGtfsStore: atacGtfsStore,
+                atacRealtimeService: atacRealtimeService,
+                gtfsStore: gtfsStore,
+                vehicleTracker: vehicleTracker,
+                transitsRepository: transitsRepository,
+                astralTrainRepository: astralTrainRepository
+            )
+            .tabItem { Label("Preferiti", systemImage: "star.fill") }
+            .tag(RootTab.preferiti)
+        }
+        .task {
+            await gtfsStore.ensureLoaded()
+        }
+        .task {
+            // Independent of Cotral's own GTFS load — Atac/Roma TPL is an
+            // additional overlay, not a blocking requirement. If it fails,
+            // the app should still work fine for Cotral alone.
+            await atacGtfsStore.ensureLoaded()
+        }
     }
 
     private var dataLoadingBannerItems: [DataLoadingBanner.Item] {
@@ -206,7 +246,7 @@ struct ContentView: View {
                     Spacer()
                     mapControls
                         .padding(.trailing)
-                        .padding(.bottom, 48)
+                        .padding(.bottom, 16)
                 }
             }
         }
@@ -227,7 +267,8 @@ struct ContentView: View {
                 stops: group.stops,
                 routeId: isAtacFocus ? focusedRouteId : nil,
                 realtimeService: atacRealtimeService,
-                atacGtfsStore: atacGtfsStore
+                atacGtfsStore: atacGtfsStore,
+                favoritesStore: favoritesStore
             )
             .presentationDetents([.medium, .large])
             .presentationDragIndicator(.visible)
@@ -260,25 +301,8 @@ struct ContentView: View {
             }
             .presentationDragIndicator(.visible)
         }
-        .sheet(isPresented: $showFavorites) {
-            FavoritesListView(favoritesStore: favoritesStore) { pole in
-                mapViewModel.centerOn(pole)
-                selectedPole = pole
-            }
-        }
         .sheet(isPresented: $showInfo) {
             InfoSheet()
-        }
-        .sheet(isPresented: $showLinee) {
-            LineeListView(
-                atacGtfsStore: atacGtfsStore,
-                atacRealtimeService: atacRealtimeService,
-                gtfsStore: gtfsStore,
-                favoritesStore: favoritesStore,
-                vehicleTracker: vehicleTracker,
-                transitsRepository: transitsRepository,
-                astralTrainRepository: astralTrainRepository
-            )
         }
         .onAppear {
             guard !hasRequestedLocation else { return }
@@ -311,27 +335,9 @@ struct ContentView: View {
     private var mapControls: some View {
         VStack(spacing: 12) {
             Button {
-                showInfo = true
+                reloadAroundUserOrLastPole()
             } label: {
-                Image(systemName: "info.circle")
-                    .font(.headline)
-                    .frame(width: 44, height: 44)
-            }
-            .background(.thinMaterial, in: Circle())
-
-            Button {
-                showLinee = true
-            } label: {
-                Image(systemName: "list.bullet")
-                    .font(.headline)
-                    .frame(width: 44, height: 44)
-            }
-            .background(.thinMaterial, in: Circle())
-
-            Button {
-                showFavorites = true
-            } label: {
-                Image(systemName: "star.fill")
+                Image(systemName: "location.fill")
                     .font(.headline)
                     .frame(width: 44, height: 44)
             }
@@ -347,9 +353,9 @@ struct ContentView: View {
             .background(.thinMaterial, in: Circle())
 
             Button {
-                reloadAroundUserOrLastPole()
+                showInfo = true
             } label: {
-                Image(systemName: "location.fill")
+                Image(systemName: "info.circle")
                     .font(.headline)
                     .frame(width: 44, height: 44)
             }

@@ -1,6 +1,6 @@
 import CoreLocation
 
-struct AtacStop: Hashable, Identifiable {
+struct AtacStop: Codable, Hashable, Identifiable {
     let stopId: String
     let stopName: String
     let lat: Double

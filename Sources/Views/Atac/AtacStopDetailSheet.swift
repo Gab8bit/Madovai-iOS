@@ -24,6 +24,7 @@ struct AtacStopDetailSheet: View {
     let routeId: String?
     @ObservedObject var realtimeService: AtacRealtimeService
     let atacGtfsStore: AtacGtfsStore
+    @ObservedObject var favoritesStore: FavoritesStore
 
     @State private var selectedStopId: String?
     @State private var scheduledFallback: [AtacStopPrediction] = []
@@ -106,12 +107,26 @@ struct AtacStopDetailSheet: View {
     }
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(stops[0].stopName)
-                .font(.title3.bold())
-            Text("Atac / Roma TPL · tempo reale")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+        HStack(alignment: .firstTextBaseline) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(stops[0].stopName)
+                    .font(.title3.bold())
+                Text("Atac / Roma TPL · tempo reale")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            // Favorites the platform currently selected (same per-stop_id
+            // granularity Cotral's own star already uses) — switching the
+            // direction picker switches which one the star reflects.
+            Button {
+                favoritesStore.toggle(selectedStop)
+            } label: {
+                Image(systemName: favoritesStore.isFavorite(atacStopId: selectedStop.stopId) ? "star.fill" : "star")
+                    .foregroundStyle(.yellow)
+                    .font(.title2)
+            }
+            .buttonStyle(.plain)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding()
