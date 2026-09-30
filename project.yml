@@ -50,6 +50,16 @@ targets:
           - UIInterfaceOrientationLandscapeRight
         UIRequiresFullScreen: false
         NSLocationWhenInUseUsageDescription: "Madovai usa la tua posizione per mostrarti le paline e le fermate più vicine sulla mappa."
+        # "Promemoria": one BGAppRefreshTask identifier checks the next
+        # departure and posts a local notification — see
+        # `ReminderScheduler`'s doc comment for why there's exactly one
+        # identifier regardless of how many reminders the user creates
+        # (BGTaskSchedulerPermittedIdentifiers is a fixed list, it can't
+        # grow at runtime).
+        UIBackgroundModes:
+          - fetch
+        BGTaskSchedulerPermittedIdentifiers:
+          - dev.gab8bit.madovai.reminderCheck
         # The app talks directly to Cotral's own internal live-data endpoint
         # (travel.mob.cotralspa.it, the same one packages/server in
         # ChromuSx/cotral proxies) which is plain HTTP with no TLS — this
@@ -66,8 +76,8 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.gab8bit.madovai
         TARGETED_DEVICE_FAMILY: "1"
-        MARKETING_VERSION: "1.2.0"
-        CURRENT_PROJECT_VERSION: "4"
+        MARKETING_VERSION: "1.3.0"
+        CURRENT_PROJECT_VERSION: "5"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
   CotralLiveTests:

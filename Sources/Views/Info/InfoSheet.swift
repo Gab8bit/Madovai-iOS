@@ -13,12 +13,12 @@ struct InfoSheet: View {
                     infoRow(
                         icon: "location.viewfinder",
                         title: "Copertura dei veicoli in tempo reale",
-                        text: "Atac/Roma TPL: un'unica chiamata restituisce sempre tutta la flotta attiva. Cotral non ha un endpoint simile — i suoi veicoli compaiono solo interrogando le paline attualmente visibili sulla mappa, quindi la copertura è parziale per costruzione, non un difetto."
+                        text: "Puoi vedere sulla mappa la posizione in tempo reale dei veicoli Atac e Cotral. Alcuni mezzi non hanno la geolocalizzazione attiva, quindi potrebbero non essere mostrati ma comunque calcolati nelle tabelle di marcia."
                     )
                     infoRow(
                         icon: "hand.tap",
                         title: "Tocca un veicolo",
-                        text: "Filtra la mappa al solo percorso e ai mezzi di quella linea, e apre l'orario. Per Atac/Roma TPL è l'orario completo della corsa; per Cotral solo le info disponibili (nessun orario completo esposto dall'endpoint usato). Il pulsante col cerchio e la X in basso riporta alla vista normale."
+                        text: "Filtra la mappa al solo percorso e ai mezzi di quella linea, e apre l'orario. Per Atac/Roma TPL è l'orario completo della corsa; per Cotral solo le info disponibili. Il pulsante col cerchio e la X in basso riporta alla vista normale."
                     )
                 }
 

@@ -6,7 +6,7 @@ import Foundation
 /// unrelated identifier space from PIV.do/Automezzi.do and from GTFS's own
 /// `route_id`s — these codes only mean something to ASTRAL's API
 /// (`AstralTrainClient`).
-enum CotralTrainRoute: String, CaseIterable, Identifiable, Hashable {
+enum CotralTrainRoute: String, CaseIterable, Identifiable, Hashable, Codable {
     case metromareColomboToPortaSanPaolo = "RL_CC-PSP"
     case metromarePortaSanPaoloToColombo = "RL_PSP-CC"
     case viterboUrbanaFlaminioToMontebello = "RN_RMMON"

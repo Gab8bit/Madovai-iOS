@@ -2,9 +2,9 @@ import CoreLocation
 import MapKit
 import SwiftUI
 
-/// The app's 3 top-level sections, each its own `TabView` panel.
+/// The app's 4 top-level sections, each its own `TabView` panel.
 private enum RootTab: Hashable {
-    case map, linee, preferiti
+    case map, linee, preferiti, reminders
 }
 
 struct ContentView: View {
@@ -12,6 +12,10 @@ struct ContentView: View {
     @StateObject private var mapViewModel: MapViewModel
     @StateObject private var locationManager = LocationManager()
     @StateObject private var favoritesStore = FavoritesStore()
+    /// A true singleton, not owned here — see `ReminderStore.shared`'s doc
+    /// comment for why (the background task registration in
+    /// `CotralLiveApp.init()` needs the exact same instance).
+    @ObservedObject private var reminderStore = ReminderStore.shared
     @StateObject private var vehicleTracker: VehicleTracker
 
     @StateObject private var atacGtfsStore: AtacGtfsStore
@@ -117,6 +121,14 @@ struct ContentView: View {
             )
             .tabItem { Label("Preferiti", systemImage: "star.fill") }
             .tag(RootTab.preferiti)
+
+            RemindersListView(
+                reminderStore: reminderStore,
+                gtfsStore: gtfsStore,
+                atacGtfsStore: atacGtfsStore
+            )
+            .tabItem { Label("Promemoria", systemImage: "bell.fill") }
+            .tag(RootTab.reminders)
         }
         .task {
             await gtfsStore.ensureLoaded()
