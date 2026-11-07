@@ -1,43 +1,63 @@
 import CoreLocation
 
-/// A single moving vehicle shown on the map, regardless of which source it
-/// came from. Cotral and Atac/Roma TPL have very different visibility
-/// guarantees (see `VisibilityScope`) — the UI must never imply they're
-/// equivalent.
-struct TransitVehicle: Identifiable, Hashable {
-    enum VisibilityScope: Hashable {
-        /// Atac/Roma TPL: one GTFS-Realtime call returns every active
-        /// vehicle across the whole network.
-        case fullFleet
-        /// Cotral: only vehicles found by querying transits at poles
-        /// currently visible on screen — never the full regional fleet.
-        case visibleAreaOnly
-    }
-
+/// A moving vehicle on the map, from either network. Atac/Roma TPL comes from
+/// one call covering the whole fleet; Cotral only from the poles currently
+/// visible — the UI must never imply the two are equivalent.
+struct TransitVehicle: Identifiable, Equatable {
     let id: String
-    let coordinate: CLLocationCoordinate2D
+    let latitude: Double
+    let longitude: Double
     let bearing: Double?
-    /// Line id — for Atac this is the GTFS `route_id` (used to filter the
-    /// map to just this line); for Cotral it's the `percorso` code from the
-    /// transit that surfaced this vehicle. Namespaced consistently with
-    /// however the source itself keys routes (Atac routes are already
-    /// "F:"-prefixed for rail upstream — no double-namespacing needed here).
+    /// Atac: GTFS route id (used to focus the map on the line). Cotral: the
+    /// run's `percorso` (an ASTRAL route code like "RL_PSP-CC" for trains).
     let routeId: String?
     let routeLabel: String?
     let kind: TransitVehicleKind
     let transitOperator: TransitOperator
-    let scope: VisibilityScope
-    /// Seconds of delay, if a realtime source reported one (positive = late).
+    /// Positive = late; nil when no reliable figure exists.
     let delaySeconds: Int?
-    /// Which specific run this vehicle is on right now — used to look up
-    /// its full stop-by-stop schedule (Atac only; see `AtacRealtimeService`).
+    /// Atac: the current run, for its stop-by-stop timetable (`atac-trip`).
     let tripId: String?
+    let headsign: String?
+    /// Cotral vehicle code (e.g. "T395").
+    let vehicleCode: String?
 
-    static func == (lhs: TransitVehicle, rhs: TransitVehicle) -> Bool {
-        lhs.id == rhs.id
+    var coordinate: CLLocationCoordinate2D { .init(latitude: latitude, longitude: longitude) }
+    var isCotral: Bool { transitOperator == .cotral }
+
+    /// Short text drawn inside the map badge (≤ 3 characters), else nil (icon).
+    var badgeLabel: String? {
+        guard let label = routeLabel, !label.isEmpty, label.count <= 3, CotralTrainRoute(rawValue: label) == nil else { return nil }
+        return label
     }
 
-    func hash(into hasher: inout Hasher) {
-        hasher.combine(id)
+    /// "Metro A", "Metromare", "211"…
+    var lineName: String {
+        if let routeId, let train = CotralTrainRoute(rawValue: routeId) { return train.lineName }
+        if let label = routeLabel, let metro = AtacMetroLine(routeShortName: label) { return metro.friendlyName }
+        return routeLabel ?? "—"
+    }
+}
+
+/// Rome's 4 metro lines: the feed leaves their long names blank, so the
+/// names are hand-written (the backend's `displayName` does the same for
+/// routes; vehicles only carry the bare route label).
+enum AtacMetroLine: String, CaseIterable {
+    case a = "MEA"
+    case b = "MEB"
+    case b1 = "MEB1"
+    case c = "MEC"
+
+    init?(routeShortName: String) {
+        self.init(rawValue: routeShortName.uppercased())
+    }
+
+    var friendlyName: String {
+        switch self {
+        case .a: return "Metro A"
+        case .b: return "Metro B"
+        case .b1: return "Metro B1"
+        case .c: return "Metro C"
+        }
     }
 }

@@ -42,6 +42,31 @@ final class ReminderStore: ObservableObject {
         persist()
     }
 
+    /// Train reminders created before 2.0 only stored the station *name*;
+    /// the backend's `rail` endpoint wants the station id. Resolved once via
+    /// search (exact name match on a Cotral rail stop) and saved; until then
+    /// the background check falls back to the line-wide ASTRAL view.
+    func resolveMissingTrainStationIds(api: MadovaiAPI = .shared) async {
+        let pending = reminders.filter {
+            if case .cotralTrain(_, _, nil) = $0.source { return true }
+            return false
+        }
+        guard !pending.isEmpty else { return }
+        var changed = false
+        for reminder in pending {
+            guard case .cotralTrain(let stationName, let route, _) = reminder.source,
+                  let results = try? await api.search(stationName),
+                  let stop = results.stops.first(where: {
+                      $0.isCotral && $0.rail && ReminderStatusFetcher.sameName($0.name, stationName)
+                  }),
+                  let index = reminders.firstIndex(where: { $0.id == reminder.id })
+            else { continue }
+            reminders[index].source = .cotralTrain(stationName: stationName, route: route, stopId: stop.stopId)
+            changed = true
+        }
+        if changed { persist() }
+    }
+
     private func load() {
         guard let data = defaults.data(forKey: Self.storageKey),
               let decoded = try? JSONDecoder().decode([Reminder].self, from: data)

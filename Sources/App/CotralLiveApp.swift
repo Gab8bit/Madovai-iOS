@@ -2,20 +2,21 @@ import SwiftUI
 
 @main
 struct CotralLiveApp: App {
+    private let env: AppEnvironment
+
     init() {
-        // Must happen before the app finishes launching, per
-        // `BGTaskScheduler`'s own requirement — this runs here rather than
-        // in `ContentView.init()` (which isn't invoked until `body` below
-        // is evaluated) specifically to guarantee that ordering. Crucially,
-        // this must NOT touch `ReminderStore.shared` — see
-        // `ReminderScheduler`'s doc comment for why doing so used to crash
-        // every launch with a saved reminder.
+        // Must run before launch completes, and before anything touches
+        // `ReminderStore.shared` (whose init reschedules the background
+        // task: submitting before registering is a crash — see
+        // `ReminderScheduler.isRegistered`). The environment, which builds
+        // the reminder store, is therefore created right after.
         ReminderScheduler.shared.registerBackgroundTask()
+        env = AppEnvironment()
     }
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            ContentView(env: env)
         }
     }
 }

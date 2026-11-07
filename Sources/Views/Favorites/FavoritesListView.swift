@@ -1,23 +1,16 @@
 import SwiftUI
 
-/// Self-contained "Preferiti" tab — a unified list of both Cotral poles and
-/// Atac/Roma TPL stops (`FavoriteStop`), each opening the exact same detail
-/// sheet tapping it on the map or in "Linee" would, so there's only one
-/// schedule view per stop kind to keep in sync.
+/// "Preferiti": Cotral poles and Atac / Roma TPL stops in one list, each
+/// opening the same sheet as tapping it on the map.
 struct FavoritesListView: View {
     @ObservedObject var favoritesStore: FavoritesStore
-    @ObservedObject var atacGtfsStore: AtacGtfsStore
-    @ObservedObject var atacRealtimeService: AtacRealtimeService
-    let gtfsStore: GTFSStore
-    @ObservedObject var vehicleTracker: VehicleTracker
-    let transitsRepository: TransitsRepository
-    let astralTrainRepository: AstralTrainRepository
+    let env: AppEnvironment
 
     @State private var selectedPole: Pole?
-    @State private var selectedAtacStopGroup: AtacStopGroup?
+    @State private var selectedAtacGroup: AtacStopGroup?
 
     var body: some View {
-        NavigationView {
+        NavigationStack {
             Group {
                 if favoritesStore.favorites.isEmpty {
                     EmptyStateView(
@@ -27,31 +20,14 @@ struct FavoritesListView: View {
                     )
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
-                    List(favoritesStore.favorites) { item in
-                        Button {
-                            select(item)
-                        } label: {
-                            HStack {
-                                Image(systemName: icon(for: item))
-                                    .foregroundStyle(.secondary)
-                                    .frame(width: 22)
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(item.displayName)
-                                        .foregroundStyle(.primary)
-                                    if let subtitle = item.subtitle {
-                                        Text(subtitle)
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                    }
+                    List {
+                        ForEach(favoritesStore.favorites) { item in
+                            Button { select(item) } label: { row(item) }
+                                .buttonStyle(.plain)
+                                .swipeActions(edge: .trailing) {
+                                    Button("Rimuovi", role: .destructive) { favoritesStore.remove(item) }
                                 }
-                                Spacer()
-                                Image(systemName: "chevron.right")
-                                    .font(.caption2.weight(.semibold))
-                                    .foregroundStyle(.tertiary)
-                            }
-                            .contentShape(Rectangle())
                         }
-                        .buttonStyle(.plain)
                     }
                 }
             }
@@ -59,28 +35,34 @@ struct FavoritesListView: View {
             .navigationBarTitleDisplayMode(.inline)
         }
         .sheet(item: $selectedPole) { pole in
-            PoleDetailSheetContainer(
-                pole: pole,
-                favoritesStore: favoritesStore,
-                vehicleTracker: vehicleTracker,
-                transitsRepository: transitsRepository,
-                gtfsStore: gtfsStore,
-                astralTrainRepository: astralTrainRepository
-            )
-            .presentationDetents([.medium, .large])
-            .presentationDragIndicator(.visible)
+            PoleSheet(pole: pole, favoritesStore: favoritesStore, tracker: env.vehicleTracker)
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
         }
-        .sheet(item: $selectedAtacStopGroup) { group in
-            AtacStopDetailSheet(
-                stops: group.stops,
-                routeId: nil,
-                realtimeService: atacRealtimeService,
-                atacGtfsStore: atacGtfsStore,
-                favoritesStore: favoritesStore
-            )
-            .presentationDetents([.medium, .large])
-            .presentationDragIndicator(.visible)
+        .sheet(item: $selectedAtacGroup) { group in
+            AtacStopSheet(group: group, favoritesStore: favoritesStore)
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
         }
+    }
+
+    private func row(_ item: FavoriteStop) -> some View {
+        HStack {
+            Image(systemName: icon(for: item))
+                .foregroundStyle(.secondary)
+                .frame(width: 22)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(item.displayName).foregroundStyle(.primary)
+                if let subtitle = item.subtitle {
+                    Text(subtitle).font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            Spacer()
+            Image(systemName: "chevron.right")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.tertiary)
+        }
+        .contentShape(Rectangle())
     }
 
     private func select(_ item: FavoriteStop) {
@@ -88,18 +70,15 @@ struct FavoritesListView: View {
         case .cotral(let pole):
             selectedPole = pole
         case .atac(let stop):
-            // Resolves back to every platform sharing this stop's name (not
-            // just the one favorited), same as a bare map-pin tap — see
-            // `ContentView.selectAtacStopGroup(containing:)`'s doc comment.
-            let stops = atacGtfsStore.stopsSharingName(with: stop)
-            selectedAtacStopGroup = AtacStopGroup(name: stop.stopName.trimmingCharacters(in: .whitespaces), stops: stops)
+            // The sheet completes the station's other platforms itself.
+            selectedAtacGroup = AtacStopGroup(name: stop.stopName, stops: [stop])
         }
     }
 
     private func icon(for item: FavoriteStop) -> String {
         switch item {
         case .cotral(let pole): return pole.isTreno ? "tram.fill" : "bus"
-        case .atac: return "location.fill"
+        case .atac: return "mappin.circle"
         }
     }
 }

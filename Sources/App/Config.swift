@@ -1,102 +1,81 @@
 import Foundation
 
-/// App-wide configuration for CotralLive.
+/// App-wide configuration.
 ///
-/// The app talks directly to Cotral's own internal live-data endpoint (the
-/// same undocumented one `packages/server` in github.com/ChromuSx/cotral
-/// proxies — discovered there via reverse engineering, not published by
-/// Cotral) plus Cotral's public static GTFS feed. There is no middleman
-/// server: everything the Node backend used to do (XML parsing, GTFS
-/// lookups, coordinate normalization) happens on-device.
+/// Since 2.0 every piece of data comes from the Madovai backend
+/// (Madovai-Backend, `https://madovai.gab8bit.net/api/v1`, documented in its
+/// `docs/API.md`): the app no longer downloads GTFS archives, decodes
+/// GTFS-Realtime protobuf, parses Cotral's XML or talks to ASTRAL itself.
+/// Polling intervals and thresholds mirror the web app (Madovai-Web
+/// `services.js`), which is the reference client for the same API.
 enum Config {
 
-    /// Cotral's internal live-data endpoint. Plain HTTP — see the matching
-    /// ATS exception in project.yml (`NSExceptionDomains`).
-    static let cotralBaseURL = URL(string: "http://travel.mob.cotralspa.it:7777/beApp")!
+    /// Base URL of the backend's versioned API. Can be overridden at build
+    /// time with the `MadovaiAPIBaseURL` Info.plist key (e.g. to point a
+    /// test build at a server on the local network) without code changes.
+    static let apiBaseURL: URL = {
+        // Launch argument `-MadovaiAPIBaseURL <url>` (UI tests point the app
+        // at an unreachable server this way), then the Info.plist key.
+        let override = UserDefaults.standard.string(forKey: "MadovaiAPIBaseURL")
+            ?? Bundle.main.object(forInfoDictionaryKey: "MadovaiAPIBaseURL") as? String
+        if let raw = override,
+           let url = URL(string: raw.trimmingCharacters(in: .whitespaces)), url.scheme != nil {
+            return url
+        }
+        return URL(string: "https://madovai.gab8bit.net/api/v1")!
+    }()
 
-    /// Shared client id used for the endpoints that require one (PIV.do
-    /// cmd=1/cmd=6, Automezzi.do). This is the default value published in
-    /// ChromuSx/cotral's own (MIT-licensed) server config — reused here for
-    /// the same personal, non-commercial use that project itself targets.
-    /// If Cotral ever invalidates it, check that repo for an updated value.
-    static let cotralUserId = "1BB73DCDAFA007572FC51E7407AB497C"
+    /// `GET /health` lives at the server root, not under `/api/v1`.
+    static var healthURL: URL {
+        var components = URLComponents(url: apiBaseURL, resolvingAgainstBaseURL: false)!
+        components.path = "/health"
+        components.query = nil
+        return components.url!
+    }
 
-    /// Look-ahead window (minutes) for transit queries, matching the
-    /// reference server's own default.
-    static let cotralDelta = "261"
-
-    /// Cotral's public static GTFS feeds (stops/routes/trips/stop_times),
-    /// used for pole/stop/line lookup and search. Both are the official
-    /// links from cotralspa.it/open-data/ — plain HTTP on the same
-    /// already-trusted host/port as the live endpoint above, which avoids
-    /// the TLS certificate mismatch on travel.mob.cotralspa.it:4443 (that
-    /// host's cert SAN is `*.cotralspa.it`, which doesn't literally cover
-    /// the two-level `travel.mob.cotralspa.it` — verified with `curl -v`).
-    static let gtfsBusZipURL = URL(string: "http://travel.mob.cotralspa.it:7777/GTFS/GTFS_COTRAL.zip")!
-    static let gtfsRailZipURL = URL(string: "http://travel.mob.cotralspa.it:7777/GTFS/GTFS_FERRO.zip")!
-
-    /// ASTRAL (Azienda Strade Lazio, the regional infrastructure agency —
-    /// unrelated to Cotral) runs a separate, public, unauthenticated JSON API
-    /// that is the primary source for Cotral's 3 rail lines' schedules and
-    /// live delays — PIV.do can silently omit a real, currently-running
-    /// train (confirmed via field-testing: a reinforcement run never
-    /// appeared in two consecutive PIV.do polls, live or scheduled, while
-    /// this API had it with a real delay). See `AstralTrainClient`. Replaces
-    /// the old cotralspa.it widget endpoint entirely — that one never gave a
-    /// real per-run delay (always "In orario"), so ASTRAL is a strict
-    /// upgrade, not just an alternative.
-    static let astralBaseURL = URL(string: "https://gestionecorse.astralspa.it/api")!
-
-    /// Timeout for a single network request.
+    /// Timeout for a single API request.
     static let requestTimeout: TimeInterval = 15
 
-    /// Timeout for the (much larger) GTFS zip download.
-    static let gtfsDownloadTimeout: TimeInterval = 120
-
-    /// How often the bottom sheet refreshes the transits list while open.
+    /// How often an open stop/station sheet refreshes its departures.
     static let transitsPollInterval: TimeInterval = 15
 
-    /// How often we re-fetch a followed vehicle's live position.
+    /// How often a followed Cotral vehicle's position is refreshed.
     static let vehiclePositionPollInterval: TimeInterval = 12
 
-    /// Consecutive failed/empty vehicle-position polls before we consider
-    /// live tracking lost and surface that to the user instead of leaving
-    /// the marker silently frozen.
+    /// Consecutive failed/empty position polls before live tracking is
+    /// reported as lost (instead of leaving a frozen marker looking live).
     static let vehicleTrackingLossThreshold = 2
 
-    /// Default search radius (in degrees) for "poles near me" and when
-    /// jumping to a searched locality, matching the reference server's own
-    /// GTFS bounding-box query.
-    static let nearbyPolesRangeDegrees: Double = 0.01
+    /// The whole Atac/Roma TPL fleet (one call, server-side cache of 5 s).
+    static let atacFleetPollInterval: TimeInterval = 15
 
-    // MARK: - Roma Servizi per la Mobilità (Atac / Roma TPL urban transit)
-
-    /// Static GTFS for Rome's urban network (Atac + Roma TPL combined),
-    /// published by Roma Servizi per la Mobilità under CC-BY 3.0 Italia.
-    static let atacGtfsZipURL = URL(string: "https://romamobilita.it/sites/default/files/rome_static_gtfs.zip")!
-
-    /// GTFS-Realtime (protobuf) feeds, same license/source.
-    static let atacVehiclePositionsURL = URL(string: "https://romamobilita.it/sites/default/files/rome_rtgtfs_vehicle_positions_feed.pb")!
-    static let atacTripUpdatesURL = URL(string: "https://romamobilita.it/sites/default/files/rome_rtgtfs_trip_updates_feed.pb")!
-
-    /// How often the map re-polls the Atac/Roma TPL realtime feeds.
-    static let atacRealtimePollInterval: TimeInterval = 18
-
-    /// How far (in degrees) around the current map viewport to render Atac
-    /// stops/line shapes — Rome's urban network is far too dense (thousands
-    /// of stops, hundreds of overlapping shapes) to draw all at once.
-    static let atacViewportPaddingDegrees: Double = 0.01
-
-    /// Debounce before re-querying Cotral transits / re-filtering Atac
-    /// stops+shapes after the map viewport changes, so a drag/zoom gesture
-    /// doesn't fire a request per frame.
-    static let viewportSettleDelay: TimeInterval = 0.6
-
-    /// How often the opportunistic Cotral viewport vehicle scan refreshes.
+    /// Cotral vehicles near the visible poles (server-side fan-out).
     static let cotralViewportVehiclePollInterval: TimeInterval = 18
 
-    /// Cap on how many currently-visible Cotral poles get queried per
-    /// viewport scan, to keep the opportunistic vehicle lookup from firing
-    /// dozens of requests at once in a dense area.
+    /// The backend accepts at most 15 poles per `cotral-vehicles` call.
     static let cotralViewportPoleQueryLimit = 15
+
+    /// The backend accepts at most 150 stops per `atac-live` call.
+    static let atacLiveStopLimit = 150
+
+    /// Debounce after a map gesture ends before stops/lines are reloaded.
+    static let viewportSettleDelay: TimeInterval = 0.45
+
+    /// Only show the "Caricamento dati…" banner when a request is actually
+    /// slow — no flicker on a fast connection.
+    static let slowRequestHintDelay: TimeInterval = 0.4
+
+    /// Below this zoom level stops and line shapes aren't loaded at all: a
+    /// regional viewport would drown in thousands of markers (same threshold
+    /// as the web app's `MIN_DATA_ZOOM`).
+    static let minDataZoom: Double = 13
+
+    /// Below this zoom level ambient vehicles aren't drawn (the whole city's
+    /// ~1000 vehicles at once is unreadable and slows MapKit down); a focused
+    /// line still shows its own vehicles at any zoom.
+    static let minVehicleZoom: Double = 11
+
+    /// From this zoom level vehicles are drawn as labelled badges; below it
+    /// as small dots (same idea as the web app's `.zoom-low`).
+    static let vehicleBadgeZoom: Double = 14
 }

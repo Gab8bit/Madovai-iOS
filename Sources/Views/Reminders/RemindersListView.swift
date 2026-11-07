@@ -1,45 +1,57 @@
 import SwiftUI
+import UserNotifications
 
-/// The "Promemoria" tab — same self-contained-tab shape as
-/// `FavoritesListView`: its own `NavigationView`, a plain list, tap to edit.
+/// The "Promemoria" tab: list, tap to edit, swipe to delete.
 struct RemindersListView: View {
     @ObservedObject var reminderStore: ReminderStore
-    let gtfsStore: GTFSStore
-    @ObservedObject var atacGtfsStore: AtacGtfsStore
 
     @State private var editingReminder: Reminder?
     @State private var isPresentingNewReminder = false
+    @State private var notificationsDenied = false
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
-        NavigationView {
+        NavigationStack {
             Group {
                 if reminderStore.reminders.isEmpty {
                     EmptyStateView(
                         systemImage: "bell",
                         title: "Nessun promemoria",
-                        message: "Crea un promemoria per ricevere una notifica sul prossimo bus o treno all'orario che scegli."
+                        message: "Crea un promemoria per ricevere una notifica sul prossimo bus o treno all'orario che scegli.",
+                        actionTitle: "Nuovo promemoria",
+                        action: { isPresentingNewReminder = true }
                     )
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     List {
-                        ForEach(reminderStore.reminders) { reminder in
-                            Button {
-                                editingReminder = reminder
-                            } label: {
-                                ReminderRow(reminder: reminder)
-                            }
-                            .buttonStyle(.plain)
-                            // `.onDelete`'s swipe action label is the
-                            // system's own localized "Delete" string, which
-                            // follows the device's language, not the app's
-                            // (this app is all-Italian, no localization
-                            // infrastructure) — an explicit action gives
-                            // Italian text unconditionally.
-                            .swipeActions(edge: .trailing) {
-                                Button("Elimina", role: .destructive) {
-                                    reminderStore.delete(reminder)
+                        if notificationsDenied {
+                            Section {
+                                Label {
+                                    VStack(alignment: .leading, spacing: 6) {
+                                        Text("Le notifiche sono disattivate per Madovai: i promemoria non potranno avvisarti.")
+                                            .font(.footnote)
+                                        Button("Apri Impostazioni") {
+                                            if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
+                                        }
+                                        .font(.footnote.weight(.semibold))
+                                    }
+                                } icon: {
+                                    Image(systemName: "bell.slash").foregroundStyle(.red)
                                 }
                             }
+                        }
+                        Section {
+                            ForEach(reminderStore.reminders) { reminder in
+                                Button { editingReminder = reminder } label: { ReminderRow(reminder: reminder) }
+                                    .buttonStyle(.plain)
+                                    // Explicit label: `.onDelete` would show the
+                                    // system's "Delete", in the device language.
+                                    .swipeActions(edge: .trailing) {
+                                        Button("Elimina", role: .destructive) { reminderStore.delete(reminder) }
+                                    }
+                            }
+                        } footer: {
+                            Text("Il controllo avviene sul telefono all'orario scelto: iOS decide il momento esatto, quindi può tardare di qualche minuto. Se chiudi l'app forzatamente dal multitasking, i promemoria si fermano finché non la riapri.")
                         }
                     }
                 }
@@ -48,20 +60,24 @@ struct RemindersListView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button {
-                        isPresentingNewReminder = true
-                    } label: {
-                        Image(systemName: "plus")
-                    }
+                    Button { isPresentingNewReminder = true } label: { Image(systemName: "plus") }
+                        .accessibilityLabel("Nuovo promemoria")
                 }
             }
         }
         .sheet(item: $editingReminder) { reminder in
-            ReminderFormView(reminderStore: reminderStore, gtfsStore: gtfsStore, atacGtfsStore: atacGtfsStore, editing: reminder)
+            ReminderFormView(reminderStore: reminderStore, editing: reminder)
         }
         .sheet(isPresented: $isPresentingNewReminder) {
-            ReminderFormView(reminderStore: reminderStore, gtfsStore: gtfsStore, atacGtfsStore: atacGtfsStore, editing: nil)
+            ReminderFormView(reminderStore: reminderStore, editing: nil)
         }
+        .task(id: scenePhase) { await refreshPermission() }
+        .onChange(of: isPresentingNewReminder) { _ in Task { await refreshPermission() } }
+    }
+
+    private func refreshPermission() async {
+        let settings = await UNUserNotificationCenter.current().notificationSettings()
+        notificationsDenied = settings.authorizationStatus == .denied
     }
 }
 
@@ -74,12 +90,9 @@ private struct ReminderRow: View {
                 .foregroundStyle(.secondary)
                 .frame(width: 22)
             VStack(alignment: .leading, spacing: 2) {
-                Text(reminder.stopName)
-                    .foregroundStyle(.primary)
-                if case .cotralTrain(_, let route) = reminder.source {
-                    Text(route.directionLabel)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                Text(reminder.stopName).foregroundStyle(.primary)
+                if case .cotralTrain(_, let route, _) = reminder.source {
+                    Text(route.directionLabel).font(.caption).foregroundStyle(.secondary)
                 }
                 Text("\(reminder.weekdaysLabel) · \(reminder.timeLabel)")
                     .font(.caption)

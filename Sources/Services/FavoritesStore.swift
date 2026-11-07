@@ -95,6 +95,13 @@ final class FavoritesStore: ObservableObject {
         persist()
     }
 
+    func remove(_ item: FavoriteStop) {
+        guard favoriteIds.contains(item.id) else { return }
+        favoriteIds.remove(item.id)
+        favorites.removeAll { $0.id == item.id }
+        persist()
+    }
+
     private func load() {
         guard let data = defaults.data(forKey: Self.storageKey) else { return }
         if let decoded = try? JSONDecoder().decode([FavoriteStop].self, from: data) {

@@ -37,7 +37,7 @@ final class ReminderNotifier {
 
     private func bodyText(reminder: Reminder, status: ReminderDepartureStatus, vehicleWord: String) -> String {
         var target = "per \(reminder.stopName)"
-        if case .cotralTrain(_, let route) = reminder.source {
+        if case .cotralTrain(_, let route, _) = reminder.source {
             target += ", direzione \(route.directionLabel)"
         }
 

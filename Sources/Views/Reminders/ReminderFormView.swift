@@ -1,132 +1,77 @@
 import SwiftUI
 
-/// Create/edit a Promemoria. Reuses the app's existing search *logic* and
-/// result types (`GTFSStore.searchStops`/`AtacGtfsStore.searchStops`,
-/// `SearchStopResult`) rather than `StopLineSearchBar` itself, which is
-/// coupled to `MapViewModel`'s map-camera side effects (`jumpTo`/
-/// `centerOn`) that don't belong in a form.
+/// Create/edit a Promemoria. The stop is picked with the backend search;
+/// metro stations are excluded (no per-stop live data in the feeds).
 struct ReminderFormView: View {
     @ObservedObject var reminderStore: ReminderStore
-    let gtfsStore: GTFSStore
-    @ObservedObject var atacGtfsStore: AtacGtfsStore
     let editing: Reminder?
 
     @Environment(\.dismiss) private var dismiss
+    @StateObject private var search = SearchModel(includeRoutes: false, stopFilter: { !($0.source == "atac" && $0.metro) })
 
     @State private var stopName: String
     @State private var source: ReminderSource?
-    @State private var trainDirectionCandidates: [CotralTrainRoute]
+    @State private var trainDirections: [CotralTrainRoute]
     @State private var weekdays: Set<Weekday>
     @State private var time: Date
-    @State private var searchText = ""
-    @State private var searchResults: [SearchStopResult] = []
-    @State private var metroExcludedFromSearch = false
+    @State private var isResolvingStation = false
+    @State private var stationError: String?
 
-    init(reminderStore: ReminderStore, gtfsStore: GTFSStore, atacGtfsStore: AtacGtfsStore, editing: Reminder?) {
+    init(reminderStore: ReminderStore, editing: Reminder?) {
         self.reminderStore = reminderStore
-        self.gtfsStore = gtfsStore
-        self.atacGtfsStore = atacGtfsStore
         self.editing = editing
         _stopName = State(initialValue: editing?.stopName ?? "")
         _source = State(initialValue: editing?.source)
-        _weekdays = State(initialValue: editing?.weekdays ?? [])
-        if case .cotralTrain(_, let route) = editing?.source {
-            _trainDirectionCandidates = State(initialValue: CotralTrainRoute.directions(forGTFSRouteShortName: route.gtfsRouteShortName) ?? [route])
+        _weekdays = State(initialValue: editing?.weekdays ?? [.monday, .tuesday, .wednesday, .thursday, .friday])
+        if case .cotralTrain(_, let route, _) = editing?.source {
+            _trainDirections = State(initialValue: CotralTrainRoute.directions(forGTFSRouteShortName: route.gtfsRouteShortName) ?? [route])
         } else {
-            _trainDirectionCandidates = State(initialValue: [])
+            _trainDirections = State(initialValue: [])
         }
-        if let editing {
-            var components = DateComponents()
-            components.hour = editing.hour
-            components.minute = editing.minute
-            _time = State(initialValue: Calendar.current.date(from: components) ?? Date())
-        } else {
-            _time = State(initialValue: Date())
-        }
+        var components = DateComponents()
+        components.hour = editing?.hour ?? RomeTime.clock().hour
+        components.minute = editing?.minute ?? RomeTime.clock().minute
+        _time = State(initialValue: RomeTime.calendar.date(from: components) ?? Date())
     }
 
-    /// Every Atac `stop_id` belonging to a metro line — metro has no
-    /// per-stop live data in either GTFS-RT feed (confirmed against the
-    /// project's own README), so reminders can't target it.
-    private var metroStopIds: Set<String> {
-        Set(AtacMetroLine.allCases.flatMap { atacGtfsStore.stopsForRoute($0.rawValue) }.map(\.stopId))
-    }
-
-    private var canSave: Bool {
-        source != nil && !weekdays.isEmpty
-    }
+    private var canSave: Bool { source != nil && !weekdays.isEmpty && !isResolvingStation }
 
     var body: some View {
-        NavigationView {
+        NavigationStack {
             Form {
-                Section("Fermata") {
-                    if source != nil {
-                        HStack {
-                            Text(stopName)
-                            Spacer()
-                            Button("Cambia") { source = nil; stopName = ""; trainDirectionCandidates = [] }
-                                .font(.caption)
-                        }
-                    } else {
-                        TextField("Cerca una fermata…", text: $searchText)
-                            .onChange(of: searchText, perform: search)
-                        if metroExcludedFromSearch {
-                            Label("Dati in tempo reale non disponibili per la metro.", systemImage: "info.circle")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        ForEach(searchResults) { result in
-                            Button {
-                                select(result)
-                            } label: {
-                                HStack {
-                                    Image(systemName: result.iconName).foregroundStyle(.secondary)
-                                    VStack(alignment: .leading, spacing: 1) {
-                                        Text(result.name).foregroundStyle(.primary)
-                                        Text(result.subtitle).font(.caption2).foregroundStyle(.secondary)
-                                    }
-                                }
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                }
+                Section("Fermata") { stopSection }
 
-                if trainDirectionCandidates.count > 1, case .cotralTrain(let stationName, let currentRoute) = source {
+                if trainDirections.count > 1, case .cotralTrain(let stationName, let currentRoute, let stopId) = source {
                     Section("Direzione") {
                         Picker("Direzione", selection: Binding(
                             get: { currentRoute },
-                            set: { source = .cotralTrain(stationName: stationName, route: $0) }
+                            set: { source = .cotralTrain(stationName: stationName, route: $0, stopId: stopId) }
                         )) {
-                            ForEach(trainDirectionCandidates) { route in
-                                Text(route.directionLabel).tag(route)
-                            }
+                            ForEach(trainDirections) { Text($0.directionLabel).tag($0) }
                         }
                     }
                 }
 
-                Section("Giorni") {
-                    weekdayPicker
-                }
+                Section("Giorni") { weekdayPicker }
 
                 Section("Orario") {
                     DatePicker("Orario", selection: $time, displayedComponents: .hourAndMinute)
-                        .labelsHidden()
+                        .environment(\.timeZone, RomeTime.timeZone)
                 }
 
                 Section {
                     Label(
-                        "L'orario di esecuzione è approssimativo, non garantito al minuto. L'affidabilità del risveglio in background dipende da quanto spesso apri l'app.",
+                        "Riceverai una notifica con il prossimo passaggio e il suo stato (puntuale, in ritardo o soppresso). L'orario è approssimativo: iOS decide il momento esatto del controllo in background, che è più affidabile se usi spesso l'app.",
                         systemImage: "info.circle"
                     )
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 }
 
-                if editing != nil {
+                if let editing {
                     Section {
                         Button("Elimina promemoria", role: .destructive) {
-                            if let editing { reminderStore.delete(editing) }
+                            reminderStore.delete(editing)
                             dismiss()
                         }
                     }
@@ -135,12 +80,60 @@ struct ReminderFormView: View {
             .navigationTitle(editing == nil ? "Nuovo promemoria" : "Modifica promemoria")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Annulla") { dismiss() }
+                ToolbarItem(placement: .cancellationAction) { Button("Annulla") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) { Button("Salva", action: save).disabled(!canSave) }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var stopSection: some View {
+        if source != nil || isResolvingStation {
+            HStack {
+                Text(stopName)
+                Spacer()
+                if isResolvingStation { ProgressView().controlSize(.small) }
+                Button("Cambia") {
+                    source = nil
+                    stopName = ""
+                    trainDirections = []
+                    stationError = nil
                 }
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Salva", action: save).disabled(!canSave)
+                .font(.caption)
+            }
+        } else {
+            TextField("Cerca una fermata…", text: $search.query)
+                .autocorrectionDisabled()
+                .textInputAutocapitalization(.words)
+            if let stationError {
+                Label(stationError, systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(.red)
+            }
+            if search.isSearching {
+                HStack(spacing: 8) { ProgressView().controlSize(.small); Text("Cerco…").font(.caption).foregroundStyle(.secondary) }
+            }
+            if let error = search.errorMessage {
+                Label(error, systemImage: "wifi.exclamationmark").font(.caption).foregroundStyle(.red)
+            }
+            if search.filteredOutCount > 0 {
+                Label("Dati in tempo reale non disponibili per la metro.", systemImage: "info.circle")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            if !search.trimmedQuery.isEmpty, !search.isSearching, search.errorMessage == nil, search.stops.isEmpty {
+                Text("Nessuna fermata trovata.").font(.caption).foregroundStyle(.secondary)
+            }
+            ForEach(search.stops) { stop in
+                Button { select(stop) } label: {
+                    HStack {
+                        Image(systemName: stop.iconName).foregroundStyle(.secondary).frame(width: 22)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(stop.name).foregroundStyle(.primary)
+                            Text(stop.subtitle).font(.caption2).foregroundStyle(.secondary)
+                        }
+                    }
+                    .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
             }
         }
     }
@@ -148,61 +141,57 @@ struct ReminderFormView: View {
     private var weekdayPicker: some View {
         HStack(spacing: 6) {
             ForEach(Weekday.mondayFirstOrder) { day in
+                let isOn = weekdays.contains(day)
                 Button {
-                    if weekdays.contains(day) { weekdays.remove(day) } else { weekdays.insert(day) }
+                    if isOn { weekdays.remove(day) } else { weekdays.insert(day) }
                 } label: {
                     Text(day.shortLabel)
                         .font(.caption.weight(.semibold))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 6)
-                        .background(weekdays.contains(day) ? Color.accentColor : Color.secondary.opacity(0.15), in: Capsule())
-                        .foregroundStyle(weekdays.contains(day) ? .white : .primary)
+                        .frame(maxWidth: .infinity, minHeight: 32)
+                        .background(isOn ? Color.accentColor : Color.secondary.opacity(0.15), in: Capsule())
+                        .foregroundStyle(isOn ? .white : .primary)
                 }
                 .buttonStyle(.plain)
+                .accessibilityAddTraits(isOn ? .isSelected : [])
             }
         }
     }
 
-    private func search(_ query: String) {
-        let trimmed = query.trimmingCharacters(in: .whitespaces)
-        guard !trimmed.isEmpty else {
-            searchResults = []
-            metroExcludedFromSearch = false
-            return
-        }
-        let cotral = gtfsStore.searchStops(query: trimmed).map(SearchStopResult.cotral)
-        let atacRaw = atacGtfsStore.searchStops(query: trimmed)
-        let metroIds = metroStopIds
-        let atac = atacRaw.filter { !metroIds.contains($0.stopId) }.map(SearchStopResult.atac)
-        metroExcludedFromSearch = atac.count < atacRaw.count
-        searchResults = cotral + atac
-    }
-
-    private func select(_ result: SearchStopResult) {
-        switch result {
-        case .cotral(let stop):
-            stopName = stop.stopName
-            if stop.isRail {
-                let candidates = gtfsStore.getRoutesForStop(stop.stopId)
-                    .flatMap { CotralTrainRoute.directions(forGTFSRouteShortName: $0.routeShortName) ?? [] }
-                trainDirectionCandidates = candidates
-                source = candidates.first.map { .cotralTrain(stationName: stop.stopName, route: $0) }
-            } else {
-                trainDirectionCandidates = []
-                source = .cotralBus(poleCode: stop.stopId)
+    private func select(_ stop: SearchStop) {
+        stopName = stop.name
+        stationError = nil
+        search.clear()
+        if stop.isCotral && stop.rail {
+            isResolvingStation = true
+            Task {
+                defer { isResolvingStation = false }
+                do {
+                    let pole = try await MadovaiAPI.shared.pole(id: stop.stopId)
+                    let routes = (pole.trainRoutes ?? []).compactMap(CotralTrainRoute.init(rawValue:))
+                    guard let first = routes.first else {
+                        stationError = "Nessuna linea ferroviaria trovata per questa stazione."
+                        stopName = ""
+                        return
+                    }
+                    trainDirections = routes
+                    source = .cotralTrain(stationName: stop.name, route: first, stopId: stop.stopId)
+                } catch {
+                    stationError = error.userMessage
+                    stopName = ""
+                }
             }
-        case .atac(let stop):
-            stopName = stop.stopName
-            trainDirectionCandidates = []
+        } else if stop.isCotral {
+            trainDirections = []
+            source = .cotralBus(poleCode: stop.stopId)
+        } else {
+            trainDirections = []
             source = .atacStop(stopId: stop.stopId)
         }
-        searchText = ""
-        searchResults = []
     }
 
     private func save() {
         guard let source else { return }
-        let components = Calendar.current.dateComponents([.hour, .minute], from: time)
+        let components = RomeTime.calendar.dateComponents([.hour, .minute], from: time)
         let reminder = Reminder(
             id: editing?.id ?? UUID(),
             stopName: stopName,

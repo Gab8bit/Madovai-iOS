@@ -12,13 +12,6 @@ settings:
     SWIFT_VERSION: "5.0"
     CODE_SIGN_STYLE: Automatic
     ENABLE_PREVIEWS: YES
-packages:
-  ZIPFoundation:
-    url: https://github.com/weichsel/ZIPFoundation.git
-    from: 0.9.19
-  SwiftProtobuf:
-    url: https://github.com/apple/swift-protobuf.git
-    from: 1.28.0
 targets:
   CotralLive:
     type: application
@@ -34,15 +27,12 @@ targets:
       # the .xcassets inside as an asset catalog rather than compiling it
       # as Swift source. Re-test with `resources:` if xcodegen is upgraded.
       - path: Resources
-    dependencies:
-      - package: ZIPFoundation
-      - package: SwiftProtobuf
     info:
       path: Sources/App/Info.plist
       properties:
         CFBundleDisplayName: Madovai
-        CFBundleShortVersionString: "1.0"
-        CFBundleVersion: "1"
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         UILaunchScreen: {}
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
@@ -60,24 +50,12 @@ targets:
           - fetch
         BGTaskSchedulerPermittedIdentifiers:
           - dev.gab8bit.madovai.reminderCheck
-        # The app talks directly to Cotral's own internal live-data endpoint
-        # (travel.mob.cotralspa.it, the same one packages/server in
-        # ChromuSx/cotral proxies) which is plain HTTP with no TLS — this
-        # exception targets ONLY that specific host, not a blanket allow-all.
-        # The GTFS static-data download uses HTTPS and needs no exception.
-        NSAppTransportSecurity:
-          NSExceptionDomains:
-            travel.mob.cotralspa.it:
-              NSExceptionAllowsInsecureHTTPLoads: true
-              NSIncludesSubdomains: false
-              NSExceptionMinimumTLSVersion: TLSv1.2
-              NSExceptionRequiresForwardSecrecy: false
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.gab8bit.madovai
         TARGETED_DEVICE_FAMILY: "1"
-        MARKETING_VERSION: "1.3.0"
-        CURRENT_PROJECT_VERSION: "5"
+        MARKETING_VERSION: "2.0.0"
+        CURRENT_PROJECT_VERSION: "6"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
   CotralLiveTests:
@@ -92,12 +70,26 @@ targets:
       base:
         GENERATE_INFOPLIST_FILE: YES
         PRODUCT_BUNDLE_IDENTIFIER: dev.gab8bit.madovai.tests
+  CotralLiveUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    deploymentTarget: "16.0"
+    sources:
+      - path: Tests/CotralLiveUITests
+    dependencies:
+      - target: CotralLive
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: dev.gab8bit.madovai.uitests
+        TEST_TARGET_NAME: CotralLive
 schemes:
   CotralLive:
     build:
       targets:
         CotralLive: all
         CotralLiveTests: [test]
+        CotralLiveUITests: [test]
     run:
       config: Debug
     archive:
@@ -106,3 +98,4 @@ schemes:
       config: Debug
       targets:
         - CotralLiveTests
+        - CotralLiveUITests

@@ -1,83 +1,111 @@
 import SwiftUI
 
+/// "Cerca una fermata o una linea…" over the map: lines first, then stops,
+/// across Cotral and Atac / Roma TPL (matching runs on the backend).
 struct StopLineSearchBar: View {
-    @ObservedObject var viewModel: MapViewModel
-    var onSelectStop: (SearchStopResult) -> Void
-    var onSelectRoute: (SearchRouteResult) -> Void
+    @ObservedObject var model: SearchModel
+    var onSelectStop: (SearchStop) -> Void
+    var onSelectRoute: (RouteInfo) -> Void
 
     @FocusState private var isFocused: Bool
-
-    private var hasResults: Bool {
-        !viewModel.stopResults.isEmpty || !viewModel.routeResults.isEmpty
-    }
 
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(.secondary)
-                TextField("Cerca una fermata o una linea…", text: $viewModel.searchText)
+                TextField("Cerca una fermata o una linea…", text: $model.query)
                     .focused($isFocused)
                     .textInputAutocapitalization(.words)
                     .autocorrectionDisabled()
-                    .onChange(of: viewModel.searchText) { _ in
-                        viewModel.search()
-                    }
-                if !viewModel.searchText.isEmpty {
+                    .submitLabel(.search)
+                if model.isSearching {
+                    ProgressView().controlSize(.small)
+                }
+                if !model.query.isEmpty {
                     Button {
-                        viewModel.clearSearch()
+                        model.clear()
                         isFocused = false
                     } label: {
                         Image(systemName: "xmark.circle.fill")
                             .foregroundStyle(.secondary)
                     }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Cancella")
                 }
             }
-            .padding(10)
-            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .padding(.horizontal, 12)
+            .padding(.vertical, 11)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .shadow(color: .black.opacity(0.08), radius: 8, y: 2)
 
-            if isFocused && hasResults {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 0) {
-                        if !viewModel.routeResults.isEmpty {
-                            sectionHeader("Linee")
-                            ForEach(viewModel.routeResults) { route in
-                                resultRow(
-                                    icon: route.iconName,
-                                    title: route.displayName,
-                                    subtitle: [route.subtitle, route.longName].filter { !$0.isEmpty }.joined(separator: " · ")
-                                ) {
-                                    isFocused = false
-                                    onSelectRoute(route)
-                                }
-                                if route.id != viewModel.routeResults.last?.id {
-                                    Divider().padding(.leading, 40)
-                                }
-                            }
-                        }
-                        if !viewModel.stopResults.isEmpty {
-                            sectionHeader("Fermate")
-                            ForEach(viewModel.stopResults) { stop in
-                                resultRow(icon: stop.iconName, title: stop.name, subtitle: stop.subtitle) {
-                                    isFocused = false
-                                    onSelectStop(stop)
-                                }
-                                if stop.id != viewModel.stopResults.last?.id {
-                                    Divider().padding(.leading, 40)
-                                }
-                            }
-                        }
-                    }
-                }
-                .frame(maxHeight: 320)
-                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                .padding(.top, 6)
+            if isFocused && !model.trimmedQuery.isEmpty {
+                results
+                    .padding(.top, 6)
+                    .transition(.opacity)
             }
         }
         .padding(.horizontal)
         .padding(.top, 8)
-        .animation(.easeInOut(duration: 0.15), value: viewModel.stopResults)
-        .animation(.easeInOut(duration: 0.15), value: viewModel.routeResults)
+        .animation(.easeInOut(duration: 0.15), value: model.hasResults)
+    }
+
+    @ViewBuilder
+    private var results: some View {
+        if model.hasResults {
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    if !model.routes.isEmpty {
+                        sectionHeader("Linee")
+                        ForEach(model.routes) { route in
+                            resultRow(
+                                icon: route.iconName,
+                                title: route.isMetro || route.rail ? route.title : "Linea \(route.title)",
+                                subtitle: [route.operatorLabel, route.subtitleName].compactMap { $0 }.joined(separator: " · ")
+                            ) {
+                                select { onSelectRoute(route) }
+                            }
+                            .accessibilityIdentifier("search.route")
+                        }
+                    }
+                    if !model.stops.isEmpty {
+                        sectionHeader("Fermate")
+                        ForEach(model.stops) { stop in
+                            resultRow(icon: stop.iconName, title: stop.name, subtitle: stop.subtitle) {
+                                select { onSelectStop(stop) }
+                            }
+                            .accessibilityIdentifier(stop.isCotral ? (stop.rail ? "search.stop.cotralRail" : "search.stop.cotralBus") : "search.stop.atac")
+                        }
+                    }
+                }
+            }
+            .frame(maxHeight: 340)
+            .fixedSize(horizontal: false, vertical: true)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        } else if let error = model.errorMessage {
+            messageCard(icon: "wifi.exclamationmark", text: error, retry: model.retry)
+        } else if !model.isSearching {
+            messageCard(icon: "magnifyingglass", text: "Nessun risultato per \"\(model.trimmedQuery)\".", retry: nil)
+        }
+    }
+
+    private func select(_ action: () -> Void) {
+        isFocused = false
+        action()
+        model.clear()
+    }
+
+    private func messageCard(icon: String, text: String, retry: (() -> Void)?) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: icon).foregroundStyle(.secondary)
+            Text(text).font(.footnote).foregroundStyle(.secondary)
+            Spacer(minLength: 0)
+            if let retry {
+                Button("Riprova", action: retry).font(.footnote.weight(.semibold))
+            }
+        }
+        .padding(12)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 
     private func sectionHeader(_ title: String) -> some View {
@@ -85,35 +113,33 @@ struct StopLineSearchBar: View {
             .font(.caption.weight(.semibold))
             .foregroundStyle(.secondary)
             .padding(.horizontal, 12)
-            .padding(.top, 8)
+            .padding(.top, 10)
             .padding(.bottom, 2)
     }
 
     private func resultRow(icon: String, title: String, subtitle: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            HStack(alignment: .top) {
+            HStack(alignment: .top, spacing: 10) {
                 Image(systemName: icon)
                     .foregroundStyle(.secondary)
-                    .frame(width: 20)
+                    .frame(width: 22)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(title)
-                        .foregroundStyle(.primary)
+                    Text(title).foregroundStyle(.primary)
                     if !subtitle.isEmpty {
                         Text(subtitle)
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                            .lineLimit(1)
                     }
                 }
-                Spacer()
+                Spacer(minLength: 0)
             }
-            .padding(.vertical, 8)
+            .padding(.vertical, 9)
             .padding(.horizontal, 12)
             .contentShape(Rectangle())
         }
-        // Without this, a bare `Button` tints its whole label with the
-        // accent color, overriding the `.primary`/`.secondary` foreground
-        // styles above — washed-out, low-contrast text in dark mode
-        // specifically (confirmed against a real dark-mode screenshot).
+        // A bare Button tints its label with the accent colour, washing out
+        // the primary/secondary text in dark mode.
         .buttonStyle(.plain)
     }
 }

@@ -1,22 +1,17 @@
 import Foundation
 
 /// A single "next departure" reading, normalized across the 3 sources a
-/// Promemoria can target — Cotral bus (PIV.do), Cotral rail (ASTRAL), and
-/// Atac/Roma TPL bus/tram (GTFS-Realtime `trip_updates`). Atac metro is
-/// deliberately unsupported: neither GTFS-RT feed carries per-stop
-/// predictions for it (confirmed against the project's own README), so
-/// there is nothing to normalize.
-struct ReminderDepartureStatus {
+/// Promemoria can target — same shape and rules as the backend's
+/// `DepartureStatus` (Madovai-Backend `src/live/departureStatus.ts`), so the
+/// local notification reads exactly like the web app's push.
+struct ReminderDepartureStatus: Equatable {
     /// "HH:mm", for the notification title.
     let time: String
-    /// nil = unknown (no live delay reported for this run), 0 = on time,
-    /// >0 = late. Never negative — an early arrival isn't worth flagging in
-    /// a reminder the way a late or cancelled one is.
+    /// nil = unknown, 0 = on time, >0 = late. Never negative: an early
+    /// arrival isn't worth flagging in a reminder.
     let delayMinutes: Int?
     let isCancelled: Bool
-    /// Only set when `isCancelled` — the following departure's time, for
-    /// the notification's "Prossimo utile: HH:MM" line. Nil if there simply
-    /// isn't a next one (service ending for the day).
+    /// Only when `isCancelled`: the following departure ("Prossimo utile").
     let nextUsefulTime: String?
 }
 
@@ -37,48 +32,39 @@ extension ReminderDepartureStatus {
         )
     }
 
-    /// Cotral bus: picks the next not-yet-passed runs from a pole's live
-    /// `Transit` list (same delay-aware "already passed" reasoning as
-    /// `PoleDetailViewModel`'s own filter, reusing `Transit.minutesFromNow`
-    /// rather than re-deriving it) and reads `soppressa` — confirmed live
-    /// via `curl` against PIV.do as a raw "Y"/"N" string, parsed here for
-    /// the first time anywhere in the app (existing views never checked it).
-    static func nextUpcoming(from transits: [Transit]) -> ReminderDepartureStatus? {
-        let sorted = transits
-            .filter { ($0.minutesFromNow ?? -1) >= 0 }
-            .sorted { ($0.minutesFromNow ?? .max) < ($1.minutesFromNow ?? .max) }
-        return combine(sorted.map { transit in
+    /// Cotral bus: next not-yet-passed runs (delay-aware), soonest first.
+    static func nextUpcoming(from transits: [Transit], now: Date = Date()) -> ReminderDepartureStatus? {
+        let sorted = transits.enumerated()
+            .compactMap { index, transit -> (Int, Int, Transit)? in
+                guard let minutes = transit.minutesFromNow(now: now), minutes >= 0 else { return nil }
+                return (minutes, index, transit)
+            }
+            .sorted { $0.0 != $1.0 ? $0.0 < $1.0 : $0.1 < $1.1 }
+        return combine(sorted.map { _, _, transit in
             RawEntry(
                 time: transit.adjustedDisplayTime,
                 delayMinutes: transit.isDelayReliable ? max(0, transit.ritardoSeconds / 60) : nil,
-                isCancelled: transit.soppressa.trimmingCharacters(in: .whitespaces).uppercased() == "Y"
+                isCancelled: transit.isCancelled
             )
         })
     }
 
-    /// Cotral rail: `AstralDeparture`'s own fields already match this shape
-    /// almost exactly, having been designed for the same "puntuale/
-    /// ritardo/soppressa" presentation elsewhere in the app
-    /// (`AstralDepartureRow`). `entries` must already be sorted soonest
-    /// first — pass `[AstralDeparture].upcoming()`'s result.
+    /// Cotral rail: `entries` must already be upcoming-only, soonest first.
     static func nextUpcoming(from entries: [AstralDeparture]) -> ReminderDepartureStatus? {
         combine(entries.map { departure in
             RawEntry(time: departure.time, delayMinutes: departure.delayMinutes.map { max(0, $0) }, isCancelled: departure.isCancelled)
         })
     }
 
-    /// Atac bus/tram, from the lean `AtacStopArrivalClient` lookup — no
-    /// `AtacGtfsStore` involved (see that file's own doc comment for why).
-    /// `arrivals` must already be sorted soonest first (its own
-    /// `upcomingArrivals(stopId:limit:)` already returns them that way).
-    static func nextUpcoming(from arrivals: [AtacStopArrival]) -> ReminderDepartureStatus? {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "HH:mm"
-        return combine(arrivals.map { arrival in
+    /// Atac bus/tram: arrivals from now on, soonest first.
+    static func nextUpcoming(from arrivals: [AtacArrival], now: Date = Date()) -> ReminderDepartureStatus? {
+        let nowTs = Int(now.timeIntervalSince1970)
+        let upcoming = arrivals.filter { $0.ts >= nowTs }.sorted { $0.ts < $1.ts }
+        return combine(upcoming.map { arrival in
             RawEntry(
-                time: formatter.string(from: arrival.time),
+                time: arrival.timeLabel,
                 delayMinutes: arrival.delaySeconds.map { max(0, $0 / 60) },
-                isCancelled: arrival.isCancelled
+                isCancelled: arrival.cancelled
             )
         })
     }

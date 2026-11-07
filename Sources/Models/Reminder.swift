@@ -37,7 +37,11 @@ enum ReminderSource: Codable, Hashable {
     case cotralBus(poleCode: String)
     /// A Cotral rail station needs an explicit direction, since ASTRAL
     /// schedules are per line+direction, not per physical station.
-    case cotralTrain(stationName: String, route: CotralTrainRoute)
+    /// `stopId` (the station's GTFS id, e.g. "RL_ACILIA") lets the check use
+    /// the backend's `rail` endpoint; reminders created before 2.0 don't
+    /// have it (synthesized Codable decodes a missing optional as nil) and
+    /// get it resolved by `ReminderStore` on the next launch.
+    case cotralTrain(stationName: String, route: CotralTrainRoute, stopId: String? = nil)
     /// A GTFS `stop_id` is already directional for Atac too (one
     /// `stop_id` per platform/direction).
     case atacStop(stopId: String)
@@ -50,10 +54,8 @@ enum ReminderSource: Codable, Hashable {
 
 struct Reminder: Codable, Identifiable, Hashable {
     let id: UUID
-    /// Display name for the notification body — captured at creation time
-    /// rather than re-resolved from a GTFS store at fire time, since the
-    /// background task deliberately avoids loading those (see
-    /// `AtacStopArrivalClient`'s doc comment).
+    /// Display name for the notification body, captured at creation time so
+    /// the background check needs no extra lookup.
     var stopName: String
     var weekdays: Set<Weekday>
     var hour: Int

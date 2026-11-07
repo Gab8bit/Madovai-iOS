@@ -1,50 +1,56 @@
 import Foundation
 
-/// One scheduled passage at a Cotral rail station, from ASTRAL's
-/// `/api/transit` — replaces the old cotralspa.it-widget-era
-/// `TrainScheduleEntry`. Unlike that widget (which only ever said "In
-/// orario"), ASTRAL reports a real per-run delay, cancellations, and
-/// replacement-bus service.
-struct AstralDeparture: Identifiable, Hashable {
-    /// ASTRAL's own "corsa" id — a dynamically-inserted reinforcement run
-    /// has no "RL"/"RN"/"RV" prefix (e.g. "5175" vs the usual "RL2173"),
-    /// though this app doesn't currently surface that distinction in the UI.
+/// One scheduled passage at a Cotral rail station (the backend's `Entry`):
+/// from ASTRAL (real per-run delay, cancellations, replacement buses) or,
+/// when ASTRAL can't resolve the station, from the static GTFS timetable
+/// (then `delayMinutes` is always nil).
+struct AstralDeparture: Codable, Identifiable, Hashable {
     let id: String
-    /// "HH:mm" arrival at this specific stop.
+    /// "HH:MM" Rome, at this station.
     let time: String
+    /// Seconds since Rome midnight, for sorting/filtering.
     let sortSeconds: Int
-    /// Minutes of delay (positive = late, negative = early); `nil` when
-    /// ASTRAL hasn't computed one yet (a just-inserted reinforcement run) or
-    /// this entry came from the static-GTFS fallback tier instead of ASTRAL.
+    /// Positive = late, negative = early; nil = not known (never "on time").
     let delayMinutes: Int?
-    /// ASTRAL's "soppressa".
     let isCancelled: Bool
-    /// ASTRAL's "busSostitutivo".
     let isReplacementBus: Bool
+
+    init(id: String, time: String, sortSeconds: Int, delayMinutes: Int?, isCancelled: Bool, isReplacementBus: Bool) {
+        self.id = id
+        self.time = time
+        self.sortSeconds = sortSeconds
+        self.delayMinutes = delayMinutes
+        self.isCancelled = isCancelled
+        self.isReplacementBus = isReplacementBus
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        time = (try? c.decode(String.self, forKey: .time)) ?? ""
+        id = (try? c.decodeIfPresent(String.self, forKey: .id)) ?? time
+        sortSeconds = (try? c.decodeIfPresent(Int.self, forKey: .sortSeconds)) ?? ((RomeTime.minutesOfDay(time) ?? 0) * 60)
+        delayMinutes = try? c.decodeIfPresent(Int.self, forKey: .delayMinutes)
+        isCancelled = (try? c.decodeIfPresent(Bool.self, forKey: .isCancelled)) ?? false
+        isReplacementBus = (try? c.decodeIfPresent(Bool.self, forKey: .isReplacementBus)) ?? false
+    }
 }
 
-/// All of one direction's upcoming departures from a single rail station —
-/// replaces the old `TrainScheduleDirection`.
-struct AstralScheduleDirection: Identifiable, Hashable {
+/// One direction's departures from a rail station (`rail` → `directions[]`).
+struct AstralScheduleDirection: Codable, Identifiable, Hashable {
     let destination: String
+    /// ASTRAL route code (e.g. "RL_PSP-CC"), when the backend knows it.
+    let route: String?
     let entries: [AstralDeparture]
 
     var id: String { destination }
+    var trainRoute: CotralTrainRoute? { route.flatMap(CotralTrainRoute.init(rawValue:)) }
 }
 
 extension Array where Element == AstralDeparture {
-    /// ASTRAL's `/api/transit` returns a station's *entire* day, so any
-    /// caller that wants "what's coming up" (as opposed to the full
-    /// timetable) needs to drop everything already past and re-sort —
-    /// without this, picking `.first` off a raw response returns the day's
-    /// very first run (e.g. 05:15), not the next one from now.
-    func upcoming(from now: Date = Date(), calendar: Calendar = .current) -> [AstralDeparture] {
-        let nowSeconds = Self.secondsSinceMidnight(now, calendar: calendar)
+    /// The backend returns a station's *entire* day: keep only what's still
+    /// ahead of now (Rome time), soonest first.
+    func upcoming(from now: Date = Date()) -> [AstralDeparture] {
+        let nowSeconds = RomeTime.secondsSinceMidnight(now)
         return filter { $0.sortSeconds >= nowSeconds }.sorted { $0.sortSeconds < $1.sortSeconds }
-    }
-
-    private static func secondsSinceMidnight(_ date: Date, calendar: Calendar) -> Int {
-        let components = calendar.dateComponents([.hour, .minute, .second], from: date)
-        return (components.hour ?? 0) * 3600 + (components.minute ?? 0) * 60 + (components.second ?? 0)
     }
 }

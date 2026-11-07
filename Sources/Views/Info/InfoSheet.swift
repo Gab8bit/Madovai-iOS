@@ -1,8 +1,17 @@
 import SwiftUI
 
 struct InfoSheet: View {
+    @Environment(\.dismiss) private var dismiss
+
+    private var appVersion: String {
+        let info = Bundle.main.infoDictionary
+        let version = info?["CFBundleShortVersionString"] as? String ?? "—"
+        let build = info?["CFBundleVersion"] as? String ?? "—"
+        return "\(version) (\(build))"
+    }
+
     var body: some View {
-        NavigationView {
+        NavigationStack {
             List {
                 Section("Come funziona") {
                     infoRow(
@@ -18,7 +27,12 @@ struct InfoSheet: View {
                     infoRow(
                         icon: "hand.tap",
                         title: "Tocca un veicolo",
-                        text: "Filtra la mappa al solo percorso e ai mezzi di quella linea, e apre l'orario. Per Atac/Roma TPL è l'orario completo della corsa; per Cotral solo le info disponibili. Il pulsante col cerchio e la X in basso riporta alla vista normale."
+                        text: "Filtra la mappa al solo percorso e ai mezzi di quella linea, e apre l'orario. Per Atac/Roma TPL è l'orario completo della corsa; per Cotral solo le info disponibili. Il pulsante \"Reset\" in alto riporta alla vista normale."
+                    )
+                    infoRow(
+                        icon: "plus.magnifyingglass",
+                        title: "Fermate e linee",
+                        text: "Fermate, paline e percorsi compaiono quando avvicini la mappa a livello di quartiere; il pulsante con il percorso a destra li mostra o nasconde."
                     )
                 }
 
@@ -34,24 +48,24 @@ struct InfoSheet: View {
                 }
 
                 Section("Crediti") {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Dati trasporto Roma")
-                            .font(.subheadline.weight(.semibold))
-                        Text("Roma Servizi per la Mobilità — romamobilita.it, licenza CC-BY 3.0 Italia.")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                    }
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Dati Cotral")
-                            .font(.subheadline.weight(.semibold))
-                        Text("Endpoint e feed GTFS pubblici di Cotral S.p.A.")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                    }
+                    credit("Dati trasporto Roma", "Roma Servizi per la Mobilità — romamobilita.it, licenza CC-BY 3.0 Italia.")
+                    credit("Dati Cotral", "Endpoint e feed GTFS pubblici di Cotral S.p.A. Orari e ritardi dei treni: ASTRAL S.p.A.")
+                    credit("Server", "I dati arrivano dal server Madovai, che li raccoglie dalle fonti ufficiali e li aggiorna ogni pochi secondi.")
+                    credit("Versione", "Madovai \(appVersion)")
                 }
             }
             .navigationTitle("Info")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) { Button("Fine") { dismiss() } }
+            }
+        }
+    }
+
+    private func credit(_ title: String, _ text: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title).font(.subheadline.weight(.semibold))
+            Text(text).font(.footnote).foregroundStyle(.secondary)
         }
     }
 
